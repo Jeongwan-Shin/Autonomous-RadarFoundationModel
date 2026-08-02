@@ -1,0 +1,17 @@
+# Code only. Everything a run produces is reproducible from it and is large.
+runs/
+*.pdf
+*.log
+
+# Data and model artefacts never belong in the tree -- paths.py points at them.
+*.parquet
+*.pt
+*.zip
+checkpoints/
+
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.DS_Store
+*.orig
+*.swp

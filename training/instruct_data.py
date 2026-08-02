@@ -1,0 +1,719 @@
+#!/usr/bin/env python3
+"""Multi-task instruction dataset: video + radar + ego + text, one sample per item.
+
+Every one of the eleven tasks is posed the same way -- the sensors are identical
+and only the instruction changes -- so a single set of weights answers all of
+them and the task is a property of the prompt, not of an output head.
+
+  det_objects     01  class, range and azimuth of each road user ahead
+  track_identity  02  the same objects keyed by track id, with track age
+  plan_ego        03-1 future ego waypoints, (x, y) metres, forward-positive
+  agent_traj      03-2 one agent's future range/azimuth over 3 s
+  world_model     04  the scene 3 s on, conditioned on the ego action
+  depth_range     05  nearest object, and the nearest the radar confirms
+  motion_seg      06  moving vs stationary from the Doppler residual
+  radar_transfer  07  LRR in, MRR statistics out -- the only genuinely paired
+                      cross-radar supervision in the release
+  (08)                not a task of its own: sensor profiles are real (ML / S /
+                      none), so the loader feeds whichever radar a clip carries
+                      and says so in the prompt. `radar_dropout` masks it on top.
+  retrieval       09  the scenario tags that should retrieve this clip
+  qa              10  39,158 multiple-choice items, every numeric claim recomputed
+  desc_*          11  scene descriptions; `radar` and `complementarity` are the
+                      two kinds that put a loss on the radar pathway
+  ood_reasoning       2,077 human-verified Chain-of-Causation labels, held out of
+                      training and used only for evaluation
+
+Tasks 01-06 are pre-serialised by `datatools.frame_objects`; the geometry needs
+three archives per frame, which does not belong in a dataloader worker.
+
+Two of task 11's six kinds are deliberately not trained. `context` is
+"Spain, at night, summer" -- country and month are not observable from a forward
+camera, so it teaches the model to invent them. `qa_summary` describes the
+dataset rather than the scene.
+
+Two leakage rules are enforced here rather than left to the training script.
+
+First, ego context is truncated at the frame a question asks about. Half the QA
+set is `Anticipation` or `Planning`, and handing the model ego motion for the
+whole 20 s clip would answer those outright: the future it is asked to predict is
+in its own input. The same truncation is what keeps `plan_ego` honest -- its
+target is the ego's own future, which is in the ego stream verbatim.
+"""
+
+import glob
+import json
+import os
+import random
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+from transformers.video_utils import VideoMetadata
+
+from datatools import paths
+from training.connector import radar_prompt_block
+from training.radar_encoder import SENSOR_IDS
+from training.radar_data import RadarClipDataset
+from training.video_frames import clip_frames, pad_frames
+
+N_FRAMES = 20
+RADAR_TOKENS = 256
+
+SYSTEM = ("You are a driving-scene assistant. You receive 20 video frames at 1 Hz, "
+          "a matching sequence of forward-radar observations, and the ego "
+          "vehicle's own motion. Answer from what the sensors show. Range is in "
+          "metres and azimuth in degrees, positive to the left of the ego "
+          "heading. A line stating which sensors are present precedes every "
+          "question; if a sensor is absent, do not report what it would have "
+          "seen.")
+
+# Answers that cannot be produced without a radar. When the radar is absent --
+# a real sensor profile, or `radar_dropout` -- the target is replaced rather than
+# kept, because training the original answer against a blank radar is precisely
+# how a model learns to recite radar statistics it never read.
+RADAR_ONLY_TASKS = frozenset({
+    "radar_probe", "radar_probe_coarse", "radar_transfer", "motion_seg",
+    "radar_structure",
+    "motion_seg_cot", "agent_traj_cot", "depth_range", "desc_radar",
+    "desc_complementarity",
+})
+NO_RADAR_ANSWER = "Radar unavailable, so this cannot be determined."
+
+SENSOR_LABEL = {"lrr1": "imaging long-range radar",
+                "mrr2": "mid-range radar",
+                "srr0": "short-range radar"}
+
+# Tasks pre-serialised by datatools.frame_objects into one parquet.
+FRAME_ITEM_TASKS = ("det_objects", "track_identity", "plan_ego", "agent_traj",
+                    "world_model", "depth_range", "motion_seg")
+
+# Same questions, but the answer is {"rationale": ..., "answer": ...} and the
+# rationale has to state the radar reading first. Only two tasks qualify: a
+# rationale is worth training when the radar quantity sits upstream of the
+# answer, and for `radar_probe` the quantity *is* the answer, so a rationale
+# there would just be the answer written twice. Validated on 1,296 items -- the
+# direction the rationale claims agrees with the actual range change 92% of the
+# time for closing and 80% for receding, against 52% for always guessing.
+COT_TASKS = ("agent_traj_cot", "motion_seg_cot")
+
+# What `--tasks all` means. `ood_reasoning` is not in it: 2,077 events are the
+# only human-verified text in the release, and they are worth more as an
+# evaluation set nothing was fitted to.
+ALL_TRAIN_TASKS = FRAME_ITEM_TASKS + ("radar_transfer", "retrieval", "qa",
+                                      "description", "radar_probe")
+
+
+def expand_tasks(spec):
+    """Comma-separated task list where `all` stands for every trained task.
+
+    `all,ood_reasoning` is the evaluation form: everything that was trained,
+    plus the held-out human-verified set.
+    """
+    out = []
+    for token in spec.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        out.extend(ALL_TRAIN_TASKS if token == "all" else [token])
+    return tuple(dict.fromkeys(out))
+
+# Ego channels are quantised rather than printed as floats: 32 bins each, edges
+# taken from measured percentiles. Feeding "9.34 m/s" as text spends several
+# tokens on digits the model has to learn to parse.
+EGO_BINS = 32
+EGO_EDGES = {
+    "speed": np.linspace(0.0, 32.0, EGO_BINS + 1),
+    "accel": np.linspace(-4.0, 4.0, EGO_BINS + 1),
+    "yaw": np.linspace(-25.0, 25.0, EGO_BINS + 1),
+}
+
+
+def quantise(value, key):
+    return int(np.clip(np.digitize(value, EGO_EDGES[key]) - 1, 0, EGO_BINS - 1))
+
+
+def ego_text(ego_state, up_to_frame):
+    """Ego motion as bin indices, truncated at `up_to_frame` inclusive."""
+    rows = []
+    for f in range(min(up_to_frame + 1, len(ego_state))):
+        speed, accel, yaw = ego_state[f].tolist()
+        rows.append(f"t{f}:s{quantise(speed,'speed')}"
+                    f"a{quantise(accel,'accel')}y{quantise(yaw,'yaw')}")
+    return " ".join(rows)
+
+
+def frame_reference(text):
+    """The frame a question or description is about, or the last frame."""
+    import re
+    found = re.findall(r"[Ff]rames?\s+(\d+)", text or "")
+    if not found:
+        return N_FRAMES - 1
+    # Frames are 1-indexed in the text, 0-indexed here.
+    return int(np.clip(int(found[0]) - 1, 0, N_FRAMES - 1))
+
+
+# Relative weight per task in the training mixture. `qa` is camera-grounded --
+# its rationales cite obstacle and egomotion values, never radar returns -- so it
+# is held to the same weight as any single description kind rather than being
+# allowed to dominate. `radar` and `complementarity` are doubled because they are
+# the only text that puts a loss on the radar pathway at all.
+DEFAULT_MIXTURE = {
+    # radar-dependent: the only items whose answer changes when the radar does
+    "radar_probe": 2.0,
+    "radar_probe_coarse": 2.0,
+    "agent_traj_cot": 2.0,
+    "motion_seg_cot": 2.0,
+    "radar_transfer": 2.0,
+    "motion_seg": 2.0,
+    "depth_range": 2.0,
+    "desc_radar": 2.0,
+    "desc_complementarity": 2.0,
+    # camera- and ego-grounded
+    "qa": 2.0,
+    "det_objects": 1.5,
+    "plan_ego": 1.5,
+    "agent_traj": 1.5,
+    "track_identity": 1.0,
+    "world_model": 1.0,
+    "retrieval": 1.0,
+    "desc_objects": 1.0,
+    "desc_ego_maneuver": 1.0,
+    "desc_clip_summary": 1.0,
+    "ood_reasoning": 1.0,
+}
+
+
+def qa_holdout():
+    """Clips carved out of task 10 to give it the test set it shipped without.
+
+    All 1,999 QA clips are in the `train` split, so until now the task was
+    trained on and never evaluated. `datatools.make_qa_holdout` picks a fixed
+    subset; this reads it.
+
+    The exclusion applies to every task, not only QA. A held-out clip still
+    produces detection, planning and description items, and leaving those in
+    training would mean the model had already seen the clip's video and radar
+    before being questioned about it -- the split would be nominal.
+    """
+    path = os.path.join(paths.COMMON_DIR, "qa_holdout_clips.json")
+    if not os.path.exists(path):
+        return frozenset()
+    return frozenset(json.load(open(path))["clip_ids"])
+
+
+def load_items(tasks, split, limit_per_task=0, usable_clips=None):
+    """Flat list of {clip_id, task, prompt, target, frame} records.
+
+    `usable_clips` filters as items are built rather than afterwards. Filtering
+    later meant a head-truncating limit picked mostly SRR-equipped clips, which
+    were then dropped for lacking the long-range radar -- descriptions collapsed
+    from 12,000 to 2,350 and QA ended up at 68% of the mixture.
+    """
+    items = []
+    root = paths.SPLIT_ROOT
+    keep = None if usable_clips is None else set(usable_clips)
+
+    if "qa" in tasks:
+        # Every QA document records split='train', so the holdout clips have to
+        # be admitted explicitly when `test` is asked for; filtering on the
+        # recorded split alone would return nothing.
+        holdout = qa_holdout()
+        for path in sorted(glob.glob(os.path.join(root, "10_radar_vision_qa/qa/*.json"))):
+            doc = json.load(open(path))
+            held = doc["clip_id"] in holdout
+            if split == "test":
+                if not held:
+                    continue
+            elif doc.get("split") != split or held:
+                continue
+            if keep is not None and doc["clip_id"] not in keep:
+                continue
+            for item in doc.get("qa", []):
+                options = "\n".join(f"{k}. {v}" for k, v in sorted(item["options"].items()))
+                items.append({
+                    "clip_id": doc["clip_id"], "task": "qa",
+                    "prompt": f"{item['question']}\n{options}\nAnswer with the letter.",
+                    "target": item["answer"],
+                    "frame": frame_reference(item["question"]),
+                    "verified": item.get("verification", {}).get("status") == "agrees",
+                })
+
+    if "description" in tasks:
+        frame_path = os.path.join(root, "11_radar_vision_scene_description",
+                                  "descriptions_frame.parquet")
+        if os.path.exists(frame_path):
+            frame_df = pd.read_parquet(frame_path)
+            frame_df = frame_df[frame_df["split"] == split]
+            if keep is not None:
+                frame_df = frame_df[frame_df["clip_id"].isin(keep)]
+            asked = {
+                "objects": "List the road users in the forward sector.",
+                "ego_maneuver": "Describe what the ego vehicle is doing.",
+                "radar": "Describe what the forward radar observes.",
+                "complementarity": "Which labelled objects does the radar see, "
+                                   "and which are visible to the camera only?",
+            }
+            for row in frame_df.itertuples():
+                items.append({
+                    "clip_id": row.clip_id, "task": f"desc_{row.kind}",
+                    "prompt": f"At frame {row.frame}. {asked.get(row.kind, 'Describe the scene.')}",
+                    "target": row.text, "frame": int(row.frame) - 1,
+                    "verified": True,
+                })
+
+        # Clip-level descriptions. `context` and `qa_summary` are skipped: see
+        # the module docstring.
+        clip_path = os.path.join(root, "11_radar_vision_scene_description",
+                                 "descriptions_clip.parquet")
+        if os.path.exists(clip_path):
+            clip_df = pd.read_parquet(clip_path)
+            clip_df = clip_df[(clip_df["split"] == split)
+                              & (clip_df["kind"] == "clip_summary")]
+            if keep is not None:
+                clip_df = clip_df[clip_df["clip_id"].isin(keep)]
+            for row in clip_df.itertuples():
+                items.append({
+                    "clip_id": row.clip_id, "task": "desc_clip_summary",
+                    "prompt": "Summarise the whole 20 s clip: what the ego "
+                              "vehicle did and what was around it.",
+                    "target": row.text, "frame": N_FRAMES - 1,
+                    "verified": True,
+                })
+
+    if "radar_probe_coarse" in tasks:
+        # The same three questions banded instead of exact. Every recipe tried so
+        # far lands 2-4 points above the 23.9% a per-position digit prior scores
+        # on `radar_probe`, whatever is done to the training. One explanation is
+        # that the radar is unreadable through this interface; the other is that
+        # emitting "638" digit by digit is a hard way to express a quantity the
+        # encoder only knows to R^2 0.71. Bands separate the two: if precision was
+        # the barrier these scores go up, and if it was not they do not.
+        features = pd.read_parquet(
+            os.path.join(paths.COMMON_DIR, "scene_features_all_clips.parquet"),
+            columns=["clip_id", "frame", "lrr1_n_points", "lrr1_n_moving",
+                     "lrr1_max_rcs", "n_boxes_with_radar", "n_boxes_camera_only"])
+        features = features[features["lrr1_n_points"].notna()]
+        if keep is not None:
+            features = features[features["clip_id"].isin(keep)]
+
+        def band(value, step):
+            return int(round(value / step) * step)
+
+        probes = [
+            ("Roughly how many radar detections are there at this frame, and "
+             "roughly how many are moving? Answer to the nearest 50 and 10.",
+             lambda r: f"about {band(r.lrr1_n_points, 50)} detections, "
+                       f"about {band(r.lrr1_n_moving, 10)} moving."),
+            ("Roughly how strong is the strongest radar return at this frame? "
+             "Answer to the nearest 5 dBsm.",
+             lambda r: f"about {band(r.lrr1_max_rcs, 5)} dBsm."),
+            ("Roughly how many objects ahead does the radar illuminate, and "
+             "roughly how many are camera-only? Answer to the nearest 5.",
+             lambda r: f"about {band(r.n_boxes_with_radar, 5)} illuminated, "
+                       f"about {band(r.n_boxes_camera_only, 5)} camera-only."),
+        ]
+        for row in features.itertuples():
+            question, answer = probes[int(row.frame) % len(probes)]
+            items.append({
+                "clip_id": row.clip_id, "task": "radar_probe_coarse",
+                "prompt": f"At frame {int(row.frame)}. {question}",
+                "target": answer(row), "frame": int(row.frame) - 1,
+                "verified": True,
+            })
+
+    if "radar_probe" in tasks:
+        # The description tasks can be answered from a memorised prior: every
+        # `radar` sentence has the same skeleton and only the numbers move, so a
+        # model that guesses "about 700 returns, about 10% moving" scores well
+        # without reading the radar at all. That is exactly what the first 8B run
+        # did -- shuffling the radar cost only +0.011 nll. These ask for the
+        # numbers alone, where the skeleton carries no information and the answer
+        # is different for every clip.
+        features = pd.read_parquet(
+            os.path.join(paths.COMMON_DIR, "scene_features_all_clips.parquet"),
+            columns=["clip_id", "frame", "lrr1_n_points", "lrr1_n_moving",
+                     "lrr1_max_rcs", "n_boxes_with_radar", "n_boxes_camera_only"])
+        features = features[features["lrr1_n_points"].notna()]
+        if keep is not None:
+            features = features[features["clip_id"].isin(keep)]
+        probes = [
+            ("How many radar detections are there at this frame, and how many "
+             "are moving?",
+             lambda r: f"{int(r.lrr1_n_points)} detections, "
+                       f"{int(r.lrr1_n_moving)} moving."),
+            ("What is the strongest radar return at this frame, in dBsm?",
+             lambda r: f"{r.lrr1_max_rcs:.0f} dBsm."),
+            ("How many objects ahead does the radar illuminate, and how many are "
+             "camera-only?",
+             lambda r: f"{int(r.n_boxes_with_radar)} illuminated, "
+                       f"{int(r.n_boxes_camera_only)} camera-only."),
+        ]
+        for row in features.itertuples():
+            question, answer = probes[int(row.frame) % len(probes)]
+            items.append({
+                "clip_id": row.clip_id, "task": "radar_probe",
+                "prompt": f"At frame {int(row.frame)}. {question}",
+                "target": answer(row), "frame": int(row.frame) - 1,
+                "verified": True,
+            })
+
+    wanted_frame_items = [t for t in FRAME_ITEM_TASKS + COT_TASKS if t in tasks]
+    if wanted_frame_items:
+        path = os.path.join(paths.COMMON_DIR, "instruct_items_tasks01_06.parquet")
+        if os.path.exists(path):
+            built = pd.read_parquet(
+                path, columns=["clip_id", "task", "frame", "prompt", "target",
+                               "split"])
+            built = built[(built["split"] == split)
+                          & built["task"].isin(wanted_frame_items)]
+            if keep is not None:
+                built = built[built["clip_id"].isin(keep)]
+            for row in built.itertuples():
+                items.append({
+                    "clip_id": row.clip_id, "task": row.task,
+                    "prompt": f"At frame {int(row.frame)}. {row.prompt}",
+                    "target": row.target, "frame": int(row.frame) - 1,
+                    "verified": True,
+                })
+
+    if "radar_structure" in tasks:
+        # Evaluation only, and deliberately absent from ALL_TRAIN_TASKS: these
+        # ask what `head_stats` never taught the encoder to write down, so a
+        # score here is transfer. Training on them would turn them into another
+        # memorised skeleton and destroy the only honest instrument we have.
+        path = os.path.join(paths.COMMON_DIR, "radar_structure_probes.parquet")
+        built = pd.read_parquet(path,
+                                columns=["clip_id", "frame", "prompt", "target",
+                                         "split"])
+        built = built[built["split"] == split]
+        if keep is not None:
+            built = built[built["clip_id"].isin(keep)]
+        for row in built.itertuples():
+            items.append({
+                "clip_id": row.clip_id, "task": "radar_structure",
+                "prompt": row.prompt, "target": row.target,
+                "frame": int(row.frame) - 1, "verified": True,
+            })
+
+    if "radar_transfer" in tasks:
+        # The one paired cross-radar signal that exists: MRR and imaging LRR
+        # observe the same scene at the same instant on med/high rigs. SRR never
+        # co-occurs with either, so SRR -> LRR cannot be posed this way at all.
+        features = pd.read_parquet(
+            os.path.join(paths.COMMON_DIR, "scene_features_all_clips.parquet"),
+            columns=["clip_id", "frame", "mrr2_n_points", "mrr2_n_moving",
+                     "mrr2_p90_range_m", "lrr1_n_points"])
+        features = features[features["mrr2_n_points"].notna()
+                            & features["lrr1_n_points"].notna()]
+        if keep is not None:
+            features = features[features["clip_id"].isin(keep)]
+        probes = [
+            ("The mid-range radar covers this sector at lower resolution. How "
+             "many detections would it report, and how many moving?",
+             lambda r: f"{int(r.mrr2_n_points)} detections, "
+                       f"{int(r.mrr2_n_moving)} moving."),
+            ("How far out does the mid-range radar reach at this frame, at the "
+             "90th percentile of its detections?",
+             lambda r: f"{r.mrr2_p90_range_m:.0f} m."),
+        ]
+        for row in features.itertuples():
+            question, answer = probes[int(row.frame) % len(probes)]
+            items.append({
+                "clip_id": row.clip_id, "task": "radar_transfer",
+                "prompt": f"At frame {int(row.frame)}. {question}",
+                "target": answer(row), "frame": int(row.frame) - 1,
+                "verified": True,
+            })
+
+    if "retrieval" in tasks:
+        corpus = pd.read_parquet(
+            os.path.join(root, "09_scenario_retrieval/nvidia_corpus_all.parquet"),
+            columns=["clip_id", "split", "is_night", "ood_cluster"])
+        corpus = corpus[corpus["split"] == split]
+        if keep is not None:
+            corpus = corpus[corpus["clip_id"].isin(keep)]
+        # Tags are built only from what the sensors can show. `country` is in the
+        # corpus and is not: a forward camera cannot see which country it is in,
+        # so training it would reward guessing from the release's geography.
+        anchor = 11
+        features = pd.read_parquet(
+            os.path.join(paths.COMMON_DIR, "scene_features_all_clips.parquet"),
+            columns=["clip_id", "frame", "ego_speed_ms", "n_tracks_in_fov",
+                     "n_moving_in_fov", "nearest_class"])
+        features = features[features["frame"] == anchor].set_index("clip_id")
+        for row in corpus.itertuples():
+            if row.clip_id not in features.index:
+                continue
+            scene = features.loc[row.clip_id]
+            tags = ["night" if row.is_night else "daytime",
+                    f"ego {scene.ego_speed_ms:.0f} m/s"]
+            if int(scene.n_tracks_in_fov) > 0:
+                tags.append(f"{int(scene.n_tracks_in_fov)} objects ahead, "
+                            f"{int(scene.n_moving_in_fov)} moving")
+                if isinstance(scene.nearest_class, str):
+                    tags.append(f"nearest {scene.nearest_class}")
+            else:
+                tags.append("no objects ahead")
+            if isinstance(row.ood_cluster, str):
+                tags.append(row.ood_cluster.lower().replace("_", " "))
+            items.append({
+                "clip_id": row.clip_id, "task": "retrieval",
+                "prompt": "Write the scenario tags that should retrieve this clip.",
+                "target": "; ".join(tags), "frame": anchor - 1,
+                "verified": True,
+            })
+
+    if "ood_reasoning" in tasks:
+        path = os.path.join(root, "09_scenario_retrieval/nvidia_ood_queries_all.parquet")
+        if os.path.exists(path):
+            events = pd.read_parquet(path)
+            events = events[events["split"] == split]
+            if keep is not None:
+                events = events[events["clip_id"].isin(keep)]
+            for row in events.itertuples():
+                items.append({
+                    "clip_id": row.clip_id, "task": "ood_reasoning",
+                    "prompt": "What should the ego vehicle do here, and why?",
+                    "target": row.coc_text,
+                    "frame": int(np.clip(row.event_start_frame // 30, 0, N_FRAMES - 1)),
+                    "verified": True,
+                })
+    return items
+
+
+class InstructDataset(Dataset):
+    def __init__(self, tasks=("qa", "description", "ood_reasoning"), split="train",
+                 processor=None, tokenizer=None, radar="lrr1",
+                 n_frames=N_FRAMES, radar_tokens=RADAR_TOKENS,
+                 verified_only=False, samples=0, mixture=None, seed=0,
+                 max_text_tokens=512, nvidia_root=paths.NVIDIA_ROOT,
+                 all_profiles=False, radar_dropout=0.0):
+        self.clips = pd.read_parquet(
+            os.path.join(paths.COMMON_DIR, "nvidia_clips.parquet"))
+        # Everything a sample needs that is never optional: both label streams,
+        # the ego stream and the camera archive.
+        base = self.clips[
+            self.clips["has_egomotion"].fillna(False)
+            & self.clips["has_obstacle"].fillna(False)
+            & self.clips["camera_zip"].notna()
+            & (self.clips["split"] == split)]
+        has_extrinsics = base["has_radar_extrinsics"].fillna(False)
+        primary = base[base[f"has_{radar}"].fillna(False) & has_extrinsics]
+
+        # Sensor profiles are a property of the vehicle rig, not a perturbation:
+        # 'low' rigs carry only the SRR and 17,130 clips carry no front radar at
+        # all. Training across them is task 08 as the release defines it, which
+        # its README argues beats masking a sensor that was really there.
+        self.radar_of = {c: radar for c in primary.index}
+        if all_profiles:
+            fallback = base[~base.index.isin(primary.index)]
+            srr = fallback[fallback["has_srr0"].fillna(False)
+                           & fallback["has_radar_extrinsics"].fillna(False)]
+            for c in srr.index:
+                self.radar_of[c] = "srr0"
+            for c in fallback.index.difference(srr.index):
+                self.radar_of[c] = None
+        usable = pd.Index(self.radar_of.keys())
+
+        # Task 10 has no val or test clips of its own, so a fixed 99 are carved
+        # out of its training clips. They leave training for every task and come
+        # back only as `test`.
+        holdout = qa_holdout()
+        if holdout:
+            if split == "train":
+                usable = usable.difference(pd.Index(sorted(holdout)))
+            elif split == "test":
+                base = pd.read_parquet(
+                    os.path.join(paths.COMMON_DIR, "nvidia_clips.parquet"),
+                    columns=["split"])
+                usable = usable.union(
+                    pd.Index([c for c in holdout if c in base.index]))
+        self.radar_of = {c: r for c, r in self.radar_of.items() if c in set(usable)}
+        for clip in usable:
+            self.radar_of.setdefault(clip, radar)
+
+        self.items = load_items(tasks, split, usable_clips=usable)
+        if verified_only:
+            self.items = [i for i in self.items if i["verified"]]
+        self.available = self._counts(self.items)
+        if samples:
+            self.items = self._mix(self.items, samples,
+                                   mixture or DEFAULT_MIXTURE, seed)
+        self.processor = processor
+        self.tokenizer = tokenizer
+        self.n_frames = n_frames
+        self.radar_tokens = radar_tokens
+        self.max_text_tokens = max_text_tokens
+        self.nvidia_root = nvidia_root
+        self.radar_dropout = radar_dropout
+        self.seed = seed
+
+        # One reader per radar type actually in play. Clips with no front radar
+        # still go through a reader -- it returns their ego motion and a blank
+        # point cloud, which is the honest representation of that profile.
+        clip_ids = sorted({i["clip_id"] for i in self.items})
+        groups = {}
+        for clip_id in clip_ids:
+            groups.setdefault(self.radar_of.get(clip_id) or radar, []).append(clip_id)
+        self.radar_ds = {name: RadarClipDataset(ids, radar=name, n_frames=n_frames)
+                         for name, ids in groups.items()}
+        self.radar_pos = {}
+        for name, dataset in self.radar_ds.items():
+            for position, clip_id in enumerate(dataset.clip_ids):
+                self.radar_pos[clip_id] = (name, position)
+        self.items = [i for i in self.items if i["clip_id"] in self.radar_pos]
+
+    def __len__(self):
+        return len(self.items)
+
+    @staticmethod
+    def _counts(items):
+        counts = {}
+        for item in items:
+            counts[item["task"]] = counts.get(item["task"], 0) + 1
+        return counts
+
+    def task_counts(self):
+        return self._counts(self.items)
+
+    @staticmethod
+    def _mix(items, samples, mixture, seed):
+        """Draw `samples` items with the requested task proportions.
+
+        Sampled rather than truncated: taking the head of each task biases
+        towards whatever happens to sort first, which here was one vehicle
+        platform. A task with fewer items than its share gets all of them and the
+        remainder is redistributed, so a small task cannot silently shrink the
+        epoch.
+        """
+        rng = random.Random(seed)
+        buckets = {}
+        for item in items:
+            buckets.setdefault(item["task"], []).append(item)
+        weights = {t: mixture.get(t, 1.0) for t in buckets}
+        total_weight = sum(weights.values()) or 1.0
+
+        chosen, shortfall = [], 0
+        picked = set()          # identity, since the records are plain dicts
+        for task, bucket in sorted(buckets.items()):
+            want = int(samples * weights[task] / total_weight)
+            take = min(want, len(bucket))
+            shortfall += want - take
+            drawn = rng.sample(bucket, take)
+            chosen.extend(drawn)
+            picked.update(id(i) for i in drawn)
+        if shortfall:
+            leftover = [i for _, b in sorted(buckets.items()) for i in b
+                        if id(i) not in picked]
+            rng.shuffle(leftover)
+            chosen.extend(leftover[:shortfall])
+        # Shuffle so consecutive items -- and therefore every batch -- carry a
+        # mixture of tasks rather than runs of one.
+        rng.shuffle(chosen)
+        return chosen
+
+    def __getitem__(self, i):
+        item = self.items[i]
+        clip_id = item["clip_id"]
+        name, position = self.radar_pos[clip_id]
+        radar = self.radar_ds[name][position]
+        frames = pad_frames(clip_frames(self.nvidia_root, self.clips.loc[clip_id]),
+                            self.n_frames)
+
+        points, mask = radar["points"], radar["mask"]
+        present = self.radar_of.get(clip_id)
+        # Dropout on top of the real profiles. Seeded on the index so an item
+        # keeps its condition across epochs and ranks, rather than flickering
+        # between sensed and blind and averaging the two away.
+        if present is not None and self.radar_dropout:
+            if random.Random(self.seed * 1_000_003 + i).random() < self.radar_dropout:
+                present = None
+        if present is None:
+            points, mask = torch.zeros_like(points), torch.zeros_like(mask)
+
+        sensors = "camera, ego motion"
+        sensors += f", {SENSOR_LABEL[present]}" if present else ", no radar"
+
+        target = item["target"]
+        if present is None and item["task"] in RADAR_ONLY_TASKS:
+            target = NO_RADAR_ANSWER
+
+        # Ego motion stops at the frame in question; see the module docstring.
+        ego = ego_text(radar["ego_state"], item["frame"])
+
+        user = (f"{radar_prompt_block(self.radar_tokens)}\n"
+                f"Sensors present: {sensors}.\n"
+                f"Ego motion (binned, t0..t{item['frame']}): {ego}\n"
+                f"{item['prompt']}")
+        return {"clip_id": clip_id, "task": item["task"],
+                "frames": frames, "user": user, "target": target,
+                "points": points, "mask": mask,
+                # Routed experts key off this, so it has to follow the dropout:
+                # a blanked radar is `none`, not the sensor the rig carries.
+                "sensor": torch.tensor(SENSOR_IDS[present] if present
+                                       else SENSOR_IDS["none"])}
+
+
+def build_collate(processor, tokenizer, max_length=4096):
+    """Chat-template the batch and mask the loss to the answer span."""
+
+    def collate(batch):
+        texts, videos = [], []
+        for sample in batch:
+            messages = [
+                {"role": "system", "content": [{"type": "text", "text": SYSTEM}]},
+                {"role": "user", "content": [{"type": "video"},
+                                             {"type": "text", "text": sample["user"]}]},
+                {"role": "assistant", "content": [{"type": "text",
+                                                   "text": sample["target"]}]},
+            ]
+            texts.append(processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False))
+            videos.append(sample["frames"])
+
+        # Without metadata the processor assumes fps=24, so it would read the 20
+        # keyframes as 0.83 s of footage instead of 20 s. Qwen3-VL feeds
+        # timestamps into its positional encoding, so that error would misplace
+        # every temporal claim the text makes -- "at frame 12" would refer to
+        # half a second in.
+        metadata = [VideoMetadata(total_num_frames=len(v), fps=1.0,
+                                  width=v[0].width, height=v[0].height,
+                                  duration=float(len(v)),
+                                  video_backend="manual",
+                                  frames_indices=list(range(len(v))))
+                    for v in videos]
+        encoded = processor(text=texts, videos=videos, video_metadata=metadata,
+                           return_tensors="pt", padding=True, truncation=True,
+                           max_length=max_length)
+
+        # Supervise the assistant turn only. Everything before the final
+        # generation header is context, and training on it would teach the model
+        # to reproduce prompts.
+        labels = encoded["input_ids"].clone()
+        labels[encoded["attention_mask"] == 0] = -100
+        header = tokenizer("<|im_start|>assistant\n",
+                           add_special_tokens=False)["input_ids"]
+        for b in range(labels.shape[0]):
+            ids = encoded["input_ids"][b].tolist()
+            start = _find_last(ids, header)
+            if start is None:
+                labels[b, :] = -100
+            else:
+                labels[b, :start + len(header)] = -100
+        encoded["labels"] = labels
+        encoded["points"] = torch.stack([s["points"] for s in batch])
+        encoded["radar_mask"] = torch.stack([s["mask"] for s in batch])
+        encoded["sensor"] = torch.stack([s["sensor"] for s in batch])
+        encoded["task"] = [s["task"] for s in batch]
+        return encoded
+
+    return collate
+
+
+def _find_last(haystack, needle):
+    for start in range(len(haystack) - len(needle), -1, -1):
+        if haystack[start:start + len(needle)] == needle:
+            return start
+    return None
