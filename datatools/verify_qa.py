@@ -57,10 +57,12 @@ TOLERANCE = {
     "ego_pos": 3.0,       # m; rounding plus up to a frame of slack
     "ego_speed": 1.0,     # m/s
     "agent_pos": 5.0,     # m; "is any object here", so ~one vehicle length
+    "agent_speed": 1.5,   # m/s; a presence test again, not an identity one
     "distance": 5.0,      # m
     "future_pos": 5.0,    # m
 }
 UNITS = {"ego_pos": "m", "ego_speed": "m/s", "agent_pos": "m",
+         "agent_speed": "m/s",
          "distance": "m", "future_pos": "m"}
 
 
@@ -89,8 +91,26 @@ def load_clip(nvidia_root, row):
         pose_xyz, pose_rot = interpolate_pose(obs_t, ego_t, ego_xyz, ego_quat)
         world = rig_to_world(rig, pose_xyz, pose_rot)
 
+    # World-frame speed per track, so a stated agent speed can be checked the
+    # same way a stated agent position is: does some labelled object move at
+    # about that rate at that instant.
+    obs_speed = np.zeros(len(obs_t))
+    if len(obs_t):
+        ids = obs["track_id"].to_numpy()
+        for tid in np.unique(ids):
+            m = ids == tid
+            if m.sum() < 3:
+                continue
+            seconds = obs_t[m] / 1e6
+            order = np.argsort(seconds)
+            xy = world[m][:, :2][order]
+            v = np.gradient(xy, seconds[order], axis=0)
+            speeds = np.linalg.norm(v, axis=1)
+            slot = np.where(m)[0][order]
+            obs_speed[slot] = speeds
+
     return {"ego_t": ego_t, "ego_xy": ego_xyz[:, :2], "ego_speed": ego_speed,
-            "obs_t": obs_t, "obs_xy": world[:, :2]}
+            "obs_t": obs_t, "obs_xy": world[:, :2], "obs_speed": obs_speed}
 
 
 def ego_at(clip, t_s):
@@ -136,6 +156,17 @@ def evaluate(clip, claim):
         distances = np.linalg.norm(near - stated, axis=1)
         i = int(np.argmin(distances))
         return float(distances[i]), [round(v, 3) for v in near[i]]
+
+    if kind == "agent_speed":
+        if len(clip["obs_t"]) == 0:
+            return None, None
+        lo, hi = (t_s - 0.6) * 1e6, (t_s + 0.6) * 1e6
+        mask = (clip["obs_t"] >= lo) & (clip["obs_t"] <= hi)
+        speeds = clip["obs_speed"][mask]
+        if len(speeds) == 0:
+            return None, None
+        i = int(np.argmin(np.abs(speeds - claim["value"])))
+        return float(abs(speeds[i] - claim["value"])), round(float(speeds[i]), 3)
 
     if kind == "distance":
         # The text gives the range to one named agent, not to the closest one, and

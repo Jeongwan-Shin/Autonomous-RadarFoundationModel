@@ -90,13 +90,25 @@ INSTANT_TASKS = frozenset({"det_objects_azdeg", "det_objects_3dbbox",
 # of it. The vision side is five frames at 1 Hz and the radar twenty scans at
 # 4 Hz, so both cover the same five seconds at the resolution each is useful at
 # -- the camera to recognise, the radar to measure how things are moving.
-WINDOW_TASKS = frozenset({"track_step_azdeg", "track_step_bbox"})
-WINDOW_SECONDS = 5
-WINDOW_RADAR_HZ = 4
-WINDOW_FRAMES = 5
+# (seconds, radar Hz, video frames) per task. Twenty radar scans always, so the
+# rate follows the duration and the encoder's input shape never changes: five
+# seconds at 4 Hz for tracking, two at 10 Hz for planning. The camera is sampled
+# at 1 Hz either way, because that is what the video's keyframes are.
+WINDOWS = {}
+for _t in ("track_step_azdeg", "track_step_bbox",
+           "track_step_azdeg_cot", "track_step_bbox_cot"):
+    WINDOWS[_t] = (5, 4, 5)
+for _t in ("plan_ego_xy", "plan_ego_control", "plan_ego_xy_cot",
+           "plan_ego_control_cot", "agent_traj_azdeg", "agent_traj_bbox",
+           "agent_traj_azdeg_cot", "agent_traj_bbox_cot",
+           "motion_seg_azdeg", "motion_seg_bbox",
+           "motion_seg_azdeg_cot", "motion_seg_bbox_cot"):
+    WINDOWS[_t] = (2, 10, 2)
+WINDOW_TASKS = frozenset(WINDOWS)
 
 RADAR_ONLY_TASKS = frozenset({
-    "radar_probe", "radar_probe_coarse", "radar_transfer", "motion_seg",
+    "radar_probe", "radar_probe_coarse", "radar_transfer",
+    "motion_seg_azdeg", "motion_seg_bbox",
     "radar_structure", "radar_objects", "det_objects_cot", "depth_range_cot",
     "motion_seg_cot", "agent_traj_cot", "depth_range", "desc_radar",
     "desc_complementarity",
@@ -110,9 +122,15 @@ SENSOR_LABEL = {"lrr1": "imaging long-range radar",
 # Tasks pre-serialised by datatools.frame_objects into one parquet.
 # `det_objects` split in two: the input is identical and the instruction picks
 # the representation, which is the premise of the model stated as a task pair.
+# 04 world_model, 05 depth_range and 09 retrieval are held back from this
+# build. They are still defined elsewhere; they are simply not in the task set
+# this dataset was generated for, and leaving them in the lists would have the
+# loader ask for rows that are not there.
 FRAME_ITEM_TASKS = ("det_objects_azdeg", "det_objects_3dbbox",
-                    "track_step_azdeg", "track_step_bbox", "plan_ego",
-                    "agent_traj", "world_model", "depth_range", "motion_seg")
+                    "track_step_azdeg", "track_step_bbox", "plan_ego_xy",
+                    "plan_ego_control", "agent_traj_azdeg",
+                    "agent_traj_bbox", "motion_seg_azdeg",
+                    "motion_seg_bbox")
 
 # Same questions, but the answer is {"rationale": ..., "answer": ...} and the
 # rationale has to state the radar reading first. Only two tasks qualify: a
@@ -121,15 +139,16 @@ FRAME_ITEM_TASKS = ("det_objects_azdeg", "det_objects_3dbbox",
 # there would just be the answer written twice. Validated on 1,296 items -- the
 # direction the rationale claims agrees with the actual range change 92% of the
 # time for closing and 80% for receding, against 52% for always guessing.
-COT_TASKS = ("agent_traj_cot", "motion_seg_cot", "det_objects_azdeg_cot",
-             "det_objects_3dbbox_cot", "depth_range_cot",
-             "plan_ego_cot", "world_model_cot", "qa_cot")
+COT_TASKS = ("agent_traj_azdeg_cot", "agent_traj_bbox_cot",
+             "motion_seg_azdeg_cot", "motion_seg_bbox_cot", "det_objects_azdeg_cot",
+             "det_objects_3dbbox_cot", "track_step_azdeg_cot",
+             "track_step_bbox_cot", "plan_ego_xy_cot",
+             "plan_ego_control_cot", "qa_cot")
 
 # What `--tasks all` means. `ood_reasoning` is not in it: 2,077 events are the
 # only human-verified text in the release, and they are worth more as an
 # evaluation set nothing was fitted to.
-ALL_TRAIN_TASKS = FRAME_ITEM_TASKS + ("retrieval", "qa", "description",
-                                      "radar_probe")
+ALL_TRAIN_TASKS = FRAME_ITEM_TASKS + ("qa", "description", "radar_probe")
 
 
 def expand_tasks(spec):
@@ -193,20 +212,20 @@ DEFAULT_MIXTURE = {
     "agent_traj_cot": 2.0,
     "motion_seg_cot": 2.0,
     "radar_transfer": 2.0,
-    "motion_seg": 2.0,
-    "depth_range": 2.0,
+    "motion_seg_azdeg": 2.0,
+    "motion_seg_bbox": 2.0,
     "desc_radar": 2.0,
     "desc_complementarity": 2.0,
     # camera- and ego-grounded
     "qa": 2.0,
     "det_objects_azdeg": 1.5,
     "det_objects_3dbbox": 1.5,
-    "plan_ego": 1.5,
-    "agent_traj": 1.5,
+    "plan_ego_xy": 1.5,
+    "plan_ego_control": 1.5,
+    "agent_traj_azdeg": 1.5,
+    "agent_traj_bbox": 1.5,
     "track_step_azdeg": 1.0,
     "track_step_bbox": 1.0,
-    "world_model": 1.0,
-    "retrieval": 1.0,
     "desc_objects": 1.0,
     "desc_ego_maneuver": 1.0,
     "desc_clip_summary": 1.0,
@@ -214,22 +233,41 @@ DEFAULT_MIXTURE = {
 }
 
 
-def qa_holdout():
-    """Clips carved out of task 10 to give it the test set it shipped without.
+# `val` is folded into `train`. The clip-level split was inherited from the
+# release and gives train 86,607 / val 54,163 / test 37,121 -- a third of the
+# data sitting in a validation set nothing selects on. Model selection here uses
+# `test` (the human-checked QA clips and the clips held out with them), so the
+# validation third was simply unused. `test` is untouched.
+SPLITS = {"train": ("train", "val"), "val": ("val",), "test": ("test",)}
 
-    All 1,999 QA clips are in the `train` split, so until now the task was
-    trained on and never evaluated. `datatools.make_qa_holdout` picks a fixed
-    subset; this reads it.
+
+def in_split(series, split):
+    """Boolean mask for the splits a requested split covers."""
+    return series.isin(SPLITS.get(split, (split,)))
+
+
+QA_TRAIN_DIR = "10_radar_vision_qa/qa_train"
+QA_TEST_DIR = "10_radar_vision_qa/qa_gt"
+
+
+def qa_holdout():
+    """The clips task 10 is tested on, excluded from training everywhere.
+
+    These are the 139 clips of `qa_gt` -- 2,019 questions a person checked,
+    which is the only human-verified text in the release. They supersede the
+    sha1-selected 99 clips that stood in for a test set while there was none;
+    those clips are back in training, and nothing was ever evaluated on them.
 
     The exclusion applies to every task, not only QA. A held-out clip still
-    produces detection, planning and description items, and leaving those in
+    produces detection, tracking and description items, and leaving those in
     training would mean the model had already seen the clip's video and radar
     before being questioned about it -- the split would be nominal.
     """
-    path = os.path.join(paths.COMMON_DIR, "qa_holdout_clips.json")
-    if not os.path.exists(path):
+    root = os.path.join(paths.SPLIT_ROOT, QA_TEST_DIR)
+    if not os.path.isdir(root):
         return frozenset()
-    return frozenset(json.load(open(path))["clip_ids"])
+    return frozenset(json.load(open(f))["clip_id"]
+                     for f in glob.glob(os.path.join(root, "*.json")))
 
 
 def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
@@ -250,18 +288,26 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
     keep = None if usable_clips is None else set(usable_clips)
 
     if "qa" in tasks or "qa_cot" in tasks:
-        # Every QA document records split='train', so the holdout clips have to
-        # be admitted explicitly when `test` is asked for; filtering on the
-        # recorded split alone would return nothing.
+        # Two directories now: `qa_train` is the 1,999 original clips merged with
+        # the 8,000 added later, both run through the same verification and
+        # correction, and `qa_gt` is the human-checked test set. They share no
+        # clip, so the split is a directory rather than a filter.
         holdout = qa_holdout()
-        for path in sorted(glob.glob(os.path.join(root, "10_radar_vision_qa/qa/*.json"))):
+        folder = QA_TEST_DIR if split == "test" else QA_TRAIN_DIR
+        # The QA documents all record split='train' whatever clip they describe,
+        # so their own field cannot separate train from val. The clip-level
+        # split in `nvidia_clips` is what every other task uses and is the one
+        # that keeps a clip's items together on one side of the line.
+        clip_split = pd.read_parquet(
+            os.path.join(paths.COMMON_DIR, "nvidia_clips.parquet"),
+            columns=["split"])["split"]
+        for path in sorted(glob.glob(os.path.join(root, folder, "*.json"))):
             doc = json.load(open(path))
-            held = doc["clip_id"] in holdout
-            if split == "test":
-                if not held:
+            if split != "test":
+                if doc["clip_id"] in holdout:
                     continue
-            elif doc.get("split") != split or held:
-                continue
+                if clip_split.get(doc["clip_id"]) not in SPLITS.get(split, (split,)):
+                    continue
             if keep is not None and doc["clip_id"] not in keep:
                 continue
             for item in doc.get("qa", []):
@@ -278,13 +324,22 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
                     })
                 # The QA release ships a worked rationale with every question --
                 # "the ego is at 5.74 m/s, the sedan at 5.22, the difference is
-                # 0.52" -- and it was going unused while the model was trained on
-                # the letter alone. Here the reasoning is genuinely upstream:
-                # the letter is whichever option the computed number lands on.
-                # Only the checked ones are emitted; 14,252 of 39,158 carry an
-                # `agrees` verdict and the rest were never checked, so training
-                # a chain of reasoning on them would teach unverified arithmetic.
-                if "qa_cot" in tasks and verified and item.get("rationale"):
+                # 0.52" -- and here the reasoning is genuinely upstream: the
+                # letter is whichever option the computed number lands on.
+                #
+                # Everything is emitted except what the checker actively
+                # contradicts, which after the correction pass is nothing. The
+                # earlier rule kept only `agrees`, but that verdict means "had
+                # numbers and they matched", not "is correct": 62% of the set is
+                # `unchecked` because its reasoning is qualitative -- "the object
+                # directly ahead in its lane is the red automobile" -- and
+                # discarding it would have taught the model that reasoning is
+                # arithmetic. Sampled, only 13.7% of the unchecked rationales
+                # contain no number at all; the rest were unchecked because the
+                # extractor had no pattern for their form.
+                unsound = (item.get("verification", {}).get("status")
+                           == "disagrees")
+                if "qa_cot" in tasks and not unsound and item.get("rationale"):
                     items.append({
                         "clip_id": doc["clip_id"], "task": "qa_cot",
                         "prompt": f"{item['question']}\n{options}\n"
@@ -292,7 +347,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
                         "target": json.dumps({"rationale": item["rationale"],
                                               "answer": item["answer"]}),
                         "frame": frame_reference(item["question"]),
-                        "verified": True,
+                        "verified": verified,
                     })
 
     if "description" in tasks:
@@ -300,7 +355,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
                                   "descriptions_frame.parquet")
         if os.path.exists(frame_path):
             frame_df = pd.read_parquet(frame_path)
-            frame_df = frame_df[frame_df["split"] == split]
+            frame_df = frame_df[in_split(frame_df["split"], split)]
             if keep is not None:
                 frame_df = frame_df[frame_df["clip_id"].isin(keep)]
             asked = {
@@ -324,7 +379,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
                                  "descriptions_clip.parquet")
         if os.path.exists(clip_path):
             clip_df = pd.read_parquet(clip_path)
-            clip_df = clip_df[(clip_df["split"] == split)
+            clip_df = clip_df[in_split(clip_df["split"], split)
                               & (clip_df["kind"] == "clip_summary")]
             if keep is not None:
                 clip_df = clip_df[clip_df["clip_id"].isin(keep)]
@@ -421,7 +476,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
             built = pd.read_parquet(
                 path, columns=["clip_id", "task", "frame", "prompt", "target",
                                "split"])
-            built = built[(built["split"] == split)
+            built = built[in_split(built["split"], split)
                           & built["task"].isin(wanted_frame_items)]
             if keep is not None:
                 built = built[built["clip_id"].isin(keep)]
@@ -448,7 +503,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
         path = os.path.join(paths.COMMON_DIR, "radar_object_probes.parquet")
         built = pd.read_parquet(path, columns=["clip_id", "frame", "form",
                                                "prompt", "target", "split"])
-        built = built[built["split"] == split]
+        built = built[in_split(built["split"], split)]
         if forms is not None:
             built = built[built["form"].isin(forms)]
         if keep is not None:
@@ -469,7 +524,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
         built = pd.read_parquet(path,
                                 columns=["clip_id", "frame", "prompt", "target",
                                          "split"])
-        built = built[built["split"] == split]
+        built = built[in_split(built["split"], split)]
         if keep is not None:
             built = built[built["clip_id"].isin(keep)]
         for row in built.itertuples():
@@ -513,7 +568,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
         corpus = pd.read_parquet(
             os.path.join(root, "09_scenario_retrieval/nvidia_corpus_all.parquet"),
             columns=["clip_id", "split", "is_night", "ood_cluster"])
-        corpus = corpus[corpus["split"] == split]
+        corpus = corpus[in_split(corpus["split"], split)]
         if keep is not None:
             corpus = corpus[corpus["clip_id"].isin(keep)]
         # Tags are built only from what the sensors can show. `country` is in the
@@ -551,7 +606,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
         path = os.path.join(root, "09_scenario_retrieval/nvidia_ood_queries_all.parquet")
         if os.path.exists(path):
             events = pd.read_parquet(path)
-            events = events[events["split"] == split]
+            events = events[in_split(events["split"], split)]
             if keep is not None:
                 events = events[events["clip_id"].isin(keep)]
             for row in events.itertuples():
@@ -580,7 +635,7 @@ class InstructDataset(Dataset):
             self.clips["has_egomotion"].fillna(False)
             & self.clips["has_obstacle"].fillna(False)
             & self.clips["camera_zip"].notna()
-            & (self.clips["split"] == split)]
+            & in_split(self.clips["split"], split)]
         has_extrinsics = base["has_radar_extrinsics"].fillna(False)
         primary = base[base[f"has_{radar}"].fillna(False) & has_extrinsics]
 
@@ -708,8 +763,9 @@ class InstructDataset(Dataset):
             # asked about is t = frame seconds.
             radar = self.radar_ds[name].window(position, float(item["frame"]))
         elif window:
+            seconds, radar_hz, n_frames = WINDOWS[item["task"]]
             radar = self.radar_ds[name].window(position, float(item["frame"]),
-                                               rate_hz=WINDOW_RADAR_HZ)
+                                               rate_hz=radar_hz)
         else:
             radar = self.radar_ds[name][position]
         frames = pad_frames(clip_frames(self.nvidia_root, self.clips.loc[clip_id]),
@@ -718,7 +774,7 @@ class InstructDataset(Dataset):
             frames = [frames[min(int(item["frame"]), len(frames) - 1)]]
         elif window:
             end = min(int(item["frame"]), len(frames) - 1)
-            frames = frames[max(0, end - WINDOW_FRAMES + 1):end + 1]
+            frames = frames[max(0, end - n_frames + 1):end + 1]
 
         points, mask = radar["points"], radar["mask"]
         present = self.radar_of.get(clip_id)
@@ -749,8 +805,8 @@ class InstructDataset(Dataset):
             ego_header = f"Ego motion (binned, at t={item['frame']}s)"
         elif window:
             ego = ego_text(radar["ego_state"], len(radar["ego_state"]))
-            ego_header = (f"Ego motion (binned, {WINDOW_SECONDS} s at "
-                          f"{WINDOW_RADAR_HZ} Hz, ending at t={item['frame']}s)")
+            ego_header = (f"Ego motion (binned, {seconds} s at "
+                          f"{radar_hz} Hz, ending at t={item['frame']}s)")
         else:
             # Ego motion stops at the frame in question; see the module docstring.
             ego = ego_text(radar["ego_state"], item["frame"])

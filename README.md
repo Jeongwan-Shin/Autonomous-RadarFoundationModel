@@ -43,7 +43,10 @@ training/
                               radar dropout, holdout handling
   train_vlm.py                align / joint / full(FSDP2) supervised training
   train_grpo.py               GRPO with verifiable rewards
-  task_scorers.py             one scorer per task -- they do not share a metric
+  task_scorers.py             one scorer per task, and the reward derived from
+                              it -- they do not share a metric
+  select_seed.py              choose a seed on val, report it on test
+  rescore_generations.py      re-derive metrics from saved generations, no GPU
   eval_all_tasks.py           generate, score, and compare against a
                               shuffled-radar control
   probe_pipeline.py           linear probes at four points in the stack
@@ -194,6 +197,45 @@ program checks them and no preference model is involved. Group-relative
 normalisation replaces the value network, which would otherwise be a second 8 B
 model in memory, and the clipped ratio against the sampling policy removes the
 need for a frozen reference copy.
+
+### One reward per task
+
+`--reward per_task` derives each item's reward from the scorer its task is
+*evaluated* with, in `task_scorers.py`. This is what lets the whole instruction
+set be trained rather than the numeric corner of it. The earlier rewards all
+read numbers out of the answer text, so only the three tasks whose answer is a
+number could be trained at all; on `det_objects`, whose answer is a list of
+objects with a class, a range and a bearing, such a reward grades the first
+integer in the list, which is not the task.
+
+| task | reward | built from |
+|---|---|---|
+| `det_objects`, `track_identity`, `motion_seg` | `reward_objects` | detection F1, then class / motion / range accuracy on the matched objects |
+| `plan_ego` | `reward_waypoints` | horizon coverage x displacement decay, half credit at 1 m |
+| `agent_traj` | `reward_trajectory` | range decay (5 m) and bearing decay (10 deg), averaged |
+| `radar_probe`, `radar_transfer`, `depth_range`, `world_model`, `radar_objects` | `reward_quantity` | every number in the answer, by relative error |
+| `retrieval` | `reward_tags` | tag-set F1 |
+| `qa` | `reward_choice` | exact letter |
+| `desc_*` | **none** | free text -- any reward invented for it is a preference model, which is the thing RLVR exists to avoid |
+
+Deriving the reward from the scorer keeps the two from drifting: an answer that
+scores well is by construction an answer the reward paid for. `reward_objects`
+splits its credit half on F1 and half on the details of the matched objects,
+because F1 alone is satisfied by a list of plausible objects at invented ranges.
+A task with no checkable answer returns `None` and the trainer refuses to start
+rather than optimise a number someone made up.
+
+### Choosing a seed
+
+Seeds land in different places -- two GRPO runs on identical settings went
+0.378 -> 0.725 -> 0.391 and 0.330 -> 0.366 -> 0.549 -- and for a model you
+intend to ship, taking the best of them is the right call. What is not is taking
+the best of them *on the test set*: selecting the maximum of N draws shifts the
+estimate up by about the spread between seeds, measured here at 0.028, which is
+the size of the effects being argued about. `select_seed.py` separates the two
+steps, choosing on `val` and reporting the single winner on `test`. It selects
+on radar contribution rather than raw correlation, since a checkpoint can top a
+`full`-correlation table by getting better at guessing from the camera.
 
 **What GRPO did and did not do.** Measured against a matched supervised control
 at the same scale, it prevented catastrophic forgetting — continued SFT
