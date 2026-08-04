@@ -1,4 +1,4 @@
-# AutonomousRadarFoundationModel
+# Autonomous Radar Foundation Model
 
 A radar + vision + text foundation model. Video, radar and ego motion are a
 fixed input; **only the text instruction changes** to select among the tasks.
