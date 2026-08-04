@@ -410,11 +410,18 @@ def clip_items(clip_id, row, nvidia_root):
         else:
             radar = None
 
-    # 'none'-profile clips carry no front radar at all. Emitting a radar-evidence
-    # answer for them would assert "no radar return" where the truth is "no
-    # radar", which is a different claim and one the model would learn to make
-    # from the camera alone.
-    has_radar = radar is not None and extrinsics is not None
+    # 'none'-profile clips carry no front radar at all -- 17,130 of 177,891, and
+    # 9.6% of what this function used to emit. Nothing here is dropped for want
+    # of a target: every answer is built from the obstacle labels and egomotion,
+    # so a blind clip produced a perfectly valid one. What it could not produce
+    # was an honest rationale. The evidence clauses came out as "no radar
+    # return" for every object, which asserts the sensor looked and saw nothing
+    # where the truth is that there is no sensor -- a different claim, and the
+    # one a model would learn to make from the camera alone.
+    #
+    # This gate used to be computed and never read, so those items shipped.
+    if radar is None or extrinsics is None:
+        return []
 
     items = []
 

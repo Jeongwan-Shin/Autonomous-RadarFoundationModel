@@ -8,7 +8,7 @@ beside the decisions they drove, so the design can be argued with rather than
 taken on trust.
 
 Counts are read from `runs/01_data_prep/dataset_summary.json`, which
-`build_dataset_report` regenerates from the built artefacts. The per-task pages
+`datatools.dataset_summary` regenerates from the built artefacts. The per-task pages
 quote `runs/01_data_prep/task_detail.json` -- one real item per task, drawn
 through `InstructDataset` by `python -m datatools.task_detail` -- so the
 instruction, ego string, answer and rationale on the page are the strings the
@@ -18,7 +18,6 @@ model is actually fed and asked for, not a description of them.
 """
 
 import argparse
-import glob
 import json
 import os
 import sys
@@ -30,7 +29,6 @@ from reportlab.platypus import (KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer)
 
 from .build_report import register_fonts, styles, table
-from . import paths
 
 RUNS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     "runs", "01_data_prep")
@@ -139,26 +137,18 @@ SPEC = [
 
 
 def summary():
-    """Counts from the built data; rebuilt if the cache is missing."""
-    if os.path.exists(SUMMARY):
-        return json.load(open(SUMMARY))
-    import pandas as pd
-    path = os.path.join(paths.COMMON_DIR, "instruct_items_tasks01_06.parquet")
-    d = pd.read_parquet(path, columns=["task", "frame", "split"])
-    piv = d.pivot_table(index="task", columns="split", aggfunc="size", fill_value=0)
-    out = {"frame_items": {"rows": len(d), "bytes": os.path.getsize(path)},
-           "by_task": {t: {k: int(v) for k, v in r.items()} for t, r in piv.iterrows()},
-           "anchors": {t: sorted(int(x) - 1 for x in g.frame.unique())
-                       for t, g in d.groupby("task")}}
-    qa_root = os.path.join(paths.SPLIT_ROOT, "10_radar_vision_qa")
-    for name in ("qa_train", "qa_gt"):
-        n_q, ids = 0, set()
-        for f in glob.glob(os.path.join(qa_root, name, "*.json")):
-            doc = json.load(open(f))
-            ids.add(doc["clip_id"])
-            n_q += len(doc.get("qa", []))
-        out[name] = {"clips": len(ids), "questions": n_q}
-    return out
+    """Counts from the built data.
+
+    There used to be a fallback here that counted the parquet directly when the
+    file was missing. It did not apply the loader's clip filter, so its numbers
+    described rows on disk rather than items trained on -- and it filled the
+    document silently. Raising is better: a missing count is visible, a wrong
+    one is not.
+    """
+    if not os.path.exists(SUMMARY):
+        raise SystemExit(f"{SUMMARY} 없음 — 먼저 "
+                         "`python -m datatools.dataset_summary` 를 돌리세요.")
+    return json.load(open(SUMMARY))
 
 
 def detail():
@@ -231,10 +221,9 @@ def per_task(story, s, d):
          "주입됨. 스캔 수·창 길이와 무관하게 항상 240 토큰"],
         ["vision", "프레임 이미지", "1장당 78 토큰. 장수는 태스크마다 다름"],
         ["Sensors present", "camera, ego motion, <i>레이더 종류</i>",
-         "그 클립 리그가 실제로 단 센서. 없으면 " + M("no radar") + " 이고 레이더 "
-         "텐서는 0 으로 채워짐. 177,891 클립 중 <b>17,130건(9.6%)이 전방 레이더 "
-         "없음</b> — train 7.1% / val 10.3% / <b>test 14.5%</b> 로 평가 쪽이 두 배라, "
-         "레이더 기여도를 읽을 때 염두에 둘 사실"],
+         "그 클립 리그가 실제로 단 센서. 전방 레이더가 <b>없는 클립은 이 빌드에 "
+         "없음</b> (7.1절). " + M("no radar") + " 는 " + M("radar_dropout") +
+         " 으로 일부러 가릴 때만 나오고, 그때는 정답이 거부로 바뀜"],
         ["Ego motion (binned)", M("t0:s3a4y16") + " 형태",
          "속도·가속도·요레이트를 각각 32구간으로 양자화한 인덱스. "
          "구간 폭은 속도 0~32 m/s, 가속도 ±4 m/s², 요레이트 ±25 deg/s. "
@@ -605,7 +594,51 @@ def build(story, s):
          "학습하면 화면을 보고 국가를 지어내도록 배움"],
         ["11 description 의 qa_summary", "학습 제외",
          "장면이 아니라 데이터셋 자체를 서술"],
+        ["전방 레이더 없는 클립", "전 태스크 삭제", "7.1 절"],
     ], [30 * mm, 22 * mm, 95 * mm]))
+    gap(5)
+
+    P("7.1 전방 레이더가 없는 클립을 전부 지웠다", "h2")
+    P("리그에 전방 레이더가 아예 없는 클립이 <b>177,891 중 17,130건(9.6%)</b> "
+      "있었습니다. 그 클립도 정답은 정상적으로 만들어졌습니다 — 모든 태스크의 "
+      "정답은 " + M("obstacle.offline") + " 라벨과 " + M("egomotion") + "에서 "
+      "나오지 레이더에서 나오지 않기 때문입니다. 문제는 근거였습니다.")
+    story.append(Paragraph(
+        "automobile at 106 m az +16 deg: <b>no radar return</b>, camera expects "
+        "az +15 deg if stationary, sees +16 (residual 1.1 deg); ...", s["code"]))
+    P("<b>\"반사점이 없다\"와 \"센서가 없다\"는 다른 주장입니다.</b> 앞의 것은 "
+      "레이더가 보았고 아무것도 없었다는 뜻인데, 사실은 본 적이 없습니다. "
+      "이 문장을 92만 건 학습하면 모델은 카메라만 보고 레이더의 부재를 "
+      "단정하는 법을 배웁니다.")
+    gap(3)
+    P("생성 코드에 이미 이것을 막는 주석과 " + M("has_radar") + " 변수가 있었지만 "
+      "<b>그 변수를 아무도 읽지 않았습니다.</b> 함께 붙이던 " + M("needs_radar") +
+      " 플래그도 저장소 어디에서도 읽히지 않습니다. 의도는 있었고 게이트는 "
+      "없었습니다.")
+    gap(3)
+    story.append(table([
+        ["", "이전", "이후"],
+        ["프레임 아이템", "29,440,590 (3.73 GB)",
+         f"{d['frame_items']['rows']:,} ({d['frame_items']['bytes']/1e9:.2f} GB)"],
+        ["삭제", "-", "2,642,548 (9.0%)"],
+        ["학습 합계", "36,260,347", f"{d['totals']['train']:,}"],
+        ["평가 합계", "10,495,689", f"{d['totals']['test']:,}"],
+    ], [26 * mm, 50 * mm, 50 * mm], align_right=(1, 2)))
+    gap(3)
+    P("세 겹으로 막았습니다 — 생성(" + M("clip_items") + "가 빈 목록 반환), "
+      "적재(" + M("usable_clips") + "가 클립 목록에서 제외), 그리고 빌드된 "
+      "파케이에서 실제 삭제. 확인 결과 train·test 양쪽에서 해당 클립 아이템 0건, "
+      + M("radar_of=None") + " 0건, 표본의 레이더 텐서가 빈 것 0건입니다.")
+    gap(3)
+    P("독립적인 검산이 하나 나왔습니다. " + M("desc_radar") + "는 원래 이 클립들을 "
+      "이미 빼고 있었고(레이더가 없으면 레이더 서술이 없으므로) "
+      + M("desc_ego_maneuver") + "는 넣고 있었습니다. 삭제 후 두 태스크의 개수가 "
+      f"<b>정확히 같아졌습니다</b> — 학습 {n.get('desc_radar', {}).get('train', 0):,}, "
+      f"평가 {n.get('desc_radar', {}).get('test', 0):,}.")
+    gap(3)
+    P("레이더를 <b>일부러</b> 가리는 것은 다른 문제이고 " + M("radar_dropout") +
+      " 이 담당합니다. 그 경로는 정답을 " + M("\"Radar unavailable...\"") + " 거부로 "
+      "바꾸므로, 없는 반사점을 서술하는 근거가 남지 않습니다.")
     gap(5)
 
     P("8. 이번 작업에서 잡은 결함", "h1")
@@ -631,6 +664,14 @@ def build(story, s):
         ["옛 태스크 이름이 코드에 잔존",
          "평가 목록·생성 길이 상한·혼합 가중치가 새 이름에 안 붙음",
          "평가는 항목 0개로 넘어가고, 답은 잘리고, 가중치는 무시됨"],
+        [M("has_radar") + " 를 계산만 하고 안 읽음",
+         "레이더가 없는 클립에 " + M("no radar return") + " 근거를 붙여 방출",
+         "2,642,548 건(9.0%)이 \"센서가 보았고 없었다\"고 말함 — 7.1 절"],
+        [M("radar_probe") + " 에 클립 분할 없음",
+         "요약이 train 과 test 를 1,505,644 로 <b>똑같이</b> 셈",
+         "분할이 이름뿐이었음. 클립 필터를 분할별로 적용해 "
+         f"{n.get('radar_probe', {}).get('train', 0):,} / "
+         f"{n.get('radar_probe', {}).get('test', 0):,} 로 갈림"],
     ], [40 * mm, 52 * mm, 55 * mm]))
     gap(5)
 

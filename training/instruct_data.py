@@ -270,6 +270,73 @@ def qa_holdout():
                      for f in glob.glob(os.path.join(root, "*.json")))
 
 
+def usable_clips(split, radar="lrr1", all_profiles=False, clips=None):
+    """Which clips a split may draw from, and which radar each one carries.
+
+    Kept out of `InstructDataset.__init__` because it is policy, not plumbing,
+    and more than one thing needs to agree with it -- the loader that builds
+    batches and `datatools.dataset_summary`, which reports how large the data
+    is. Two copies of this would drift and the reported numbers would stop
+    describing what was trained on.
+
+    Returns `(index, {clip_id: radar or None})`.
+    """
+    if clips is None:
+        clips = pd.read_parquet(
+            os.path.join(paths.COMMON_DIR, "nvidia_clips.parquet"))
+    # Everything a sample needs that is never optional: both label streams, the
+    # ego stream and the camera archive.
+    base = clips[clips["has_egomotion"].fillna(False)
+                 & clips["has_obstacle"].fillna(False)
+                 & clips["camera_zip"].notna()
+                 & in_split(clips["split"], split)]
+    has_extrinsics = base["has_radar_extrinsics"].fillna(False)
+    primary = base[base[f"has_{radar}"].fillna(False) & has_extrinsics]
+
+    # Sensor profiles are a property of the vehicle rig, not a perturbation:
+    # 'low' rigs carry only the SRR, so `all_profiles` reaches for it rather
+    # than dropping those clips.
+    #
+    # Clips with no front radar at all are a different case and are excluded
+    # everywhere. They are 17,130 of 177,891 and were 9.6% of the items. The
+    # answer was never in doubt -- it comes from the obstacle labels and
+    # egomotion -- but the rationale said "no radar return" for every object,
+    # which claims the sensor looked and saw nothing where the truth is that
+    # there is no sensor. Blanking a radar that was really there is
+    # `radar_dropout`, and that path replaces the target with a refusal rather
+    # than leaving a rationale that describes returns nobody has.
+    radar_of = {c: radar for c in primary.index}
+    if all_profiles:
+        fallback = base[~base.index.isin(primary.index)]
+        srr = fallback[fallback["has_srr0"].fillna(False)
+                       & fallback["has_radar_extrinsics"].fillna(False)]
+        for c in srr.index:
+            radar_of[c] = "srr0"
+    usable = pd.Index(radar_of.keys())
+
+    # Task 10 has no val or test clips of its own, so a fixed set is carved out
+    # of its training clips. They leave training for every task and come back
+    # only as `test`.
+    holdout = qa_holdout()
+    if holdout:
+        if split == "train":
+            usable = usable.difference(pd.Index(sorted(holdout)))
+        elif split == "test":
+            usable = usable.union(
+                pd.Index([c for c in holdout if c in clips.index]))
+    # The holdout union adds clips back by id alone, so the radar requirement is
+    # re-applied after it rather than only before.
+    carries = clips.index[clips["has_radar_extrinsics"].fillna(False)
+                          & (clips["has_lrr1"].fillna(False)
+                             | clips["has_mrr2"].fillna(False)
+                             | clips["has_srr0"].fillna(False))]
+    usable = usable.intersection(carries)
+    radar_of = {c: r for c, r in radar_of.items() if c in set(usable)}
+    for clip in usable:
+        radar_of.setdefault(clip, radar)
+    return usable, radar_of
+
+
 def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
     """Flat list of {clip_id, task, prompt, target, frame} records.
 
@@ -629,47 +696,8 @@ class InstructDataset(Dataset):
                  all_profiles=False, radar_dropout=0.0, forms=None):
         self.clips = pd.read_parquet(
             os.path.join(paths.COMMON_DIR, "nvidia_clips.parquet"))
-        # Everything a sample needs that is never optional: both label streams,
-        # the ego stream and the camera archive.
-        base = self.clips[
-            self.clips["has_egomotion"].fillna(False)
-            & self.clips["has_obstacle"].fillna(False)
-            & self.clips["camera_zip"].notna()
-            & in_split(self.clips["split"], split)]
-        has_extrinsics = base["has_radar_extrinsics"].fillna(False)
-        primary = base[base[f"has_{radar}"].fillna(False) & has_extrinsics]
-
-        # Sensor profiles are a property of the vehicle rig, not a perturbation:
-        # 'low' rigs carry only the SRR and 17,130 clips carry no front radar at
-        # all. Training across them is task 08 as the release defines it, which
-        # its README argues beats masking a sensor that was really there.
-        self.radar_of = {c: radar for c in primary.index}
-        if all_profiles:
-            fallback = base[~base.index.isin(primary.index)]
-            srr = fallback[fallback["has_srr0"].fillna(False)
-                           & fallback["has_radar_extrinsics"].fillna(False)]
-            for c in srr.index:
-                self.radar_of[c] = "srr0"
-            for c in fallback.index.difference(srr.index):
-                self.radar_of[c] = None
-        usable = pd.Index(self.radar_of.keys())
-
-        # Task 10 has no val or test clips of its own, so a fixed 99 are carved
-        # out of its training clips. They leave training for every task and come
-        # back only as `test`.
-        holdout = qa_holdout()
-        if holdout:
-            if split == "train":
-                usable = usable.difference(pd.Index(sorted(holdout)))
-            elif split == "test":
-                base = pd.read_parquet(
-                    os.path.join(paths.COMMON_DIR, "nvidia_clips.parquet"),
-                    columns=["split"])
-                usable = usable.union(
-                    pd.Index([c for c in holdout if c in base.index]))
-        self.radar_of = {c: r for c, r in self.radar_of.items() if c in set(usable)}
-        for clip in usable:
-            self.radar_of.setdefault(clip, radar)
+        usable, self.radar_of = usable_clips(split, radar, all_profiles,
+                                             clips=self.clips)
 
         self.items = load_items(tasks, split, usable_clips=usable,
                                 forms=forms)
