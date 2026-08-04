@@ -39,7 +39,8 @@ NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def log(msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+    if int(os.environ.get("RANK", 0)) == 0:
+        print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 # --------------------------------------------------------------------------
@@ -91,10 +92,36 @@ def reward_all_numbers(generated, reference):
 REWARDS = {"relative": reward_relative, "exact": reward_exact,
            "tolerance": reward_tolerance, "all_numbers": reward_all_numbers}
 
+# `per_task` is the one that lets the other eight tasks be trained at all. The
+# four rewards above all read numbers out of the text, so `det_objects` --
+# whose answer is a list of objects with a class, a range and a bearing -- would
+# have been graded on its first integer. `training.task_scorers.reward_for`
+# derives a reward from the scorer each task is *evaluated* with instead, so the
+# thing being rewarded and the thing being reported cannot drift apart.
+PER_TASK = "per_task"
+
+
+def resolve_reward(name, task):
+    """The reward for one item. Fixed for the numeric rewards, per-task for
+    `per_task`; None when a task has no checkable answer, so the caller can skip
+    it rather than train against a made-up number."""
+    if name != PER_TASK:
+        return REWARDS[name]
+    from training.task_scorers import reward_for
+    return reward_for(task)
+
 
 # --------------------------------------------------------------------------
 # log probabilities
 # --------------------------------------------------------------------------
+
+def _score(fn, generated, reference, prompt):
+    """Some rewards take the prompt, most do not."""
+    try:
+        return fn(generated, reference, prompt)
+    except TypeError:
+        return fn(generated, reference)
+
 
 def extend_token_types(extra, length):
     """Mark the generated tokens as text.
@@ -139,7 +166,17 @@ def main(argv=None):
                          "untrained radar_transfer from 0.838 to 0.166 while "
                          "GRPO held it at 0.851, so the tasks can share a "
                          "policy without trampling each other")
-    ap.add_argument("--reward", default="relative", choices=sorted(REWARDS))
+    ap.add_argument("--forms", default=None,
+                    help="comma-separated question forms to train, for tasks "
+                         "that have them. Leaving some out is the point: a "
+                         "model graded on exactly the forms it was optimised "
+                         "for says nothing about whether it read the radar, "
+                         "which is what made `radar_probe` a circular measure")
+    ap.add_argument("--reward", default="relative",
+                    choices=sorted(REWARDS) + [PER_TASK],
+                    help=f"'{PER_TASK}' picks each item's reward from its own "
+                         "scorer, which is what allows the non-numeric tasks "
+                         "to be trained")
     ap.add_argument("--group", type=int, default=8, help="samples per prompt")
     ap.add_argument("--prompts", type=int, default=2, help="prompts per step")
     ap.add_argument("--micro", type=int, default=2,
@@ -162,9 +199,20 @@ def main(argv=None):
                                         load_encoder_state)
     from training.train_vlm import MODEL_DIR, RadarInjector
 
-    torch.manual_seed(args.seed)
-    torch.cuda.set_device(0)
-    device = torch.device("cuda", 0)
+    # Data-parallel over whatever torchrun was given. An 8 B policy in bf16 fits
+    # on one 183 GB card with room for generation, so each rank keeps a full
+    # replica and only gradients cross the wire -- far simpler than sharding,
+    # and GRPO's cost is dominated by sampling, which is perfectly parallel.
+    rank = int(os.environ.get("RANK", 0))
+    world = int(os.environ.get("WORLD_SIZE", 1))
+    local = int(os.environ.get("LOCAL_RANK", 0))
+    if world > 1:
+        torch.distributed.init_process_group("nccl")
+    torch.cuda.set_device(local)
+    device = torch.device("cuda", local)
+    # Different seeds per rank, so the ranks explore different prompts rather
+    # than all sampling the same ones.
+    torch.manual_seed(args.seed * 1000 + rank)
     model_dir = MODEL_DIR[args.model]
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     processor = AutoProcessor.from_pretrained(model_dir)
@@ -197,14 +245,21 @@ def main(argv=None):
     log(f"policy from {source}, reward '{args.reward}', group {args.group}")
 
     tasks = tuple(x.strip() for x in args.task.split(",") if x.strip())
+    forms = (tuple(x.strip() for x in args.forms.split(",") if x.strip())
+             if args.forms else None)
     dataset = InstructDataset(
-        tasks=tasks, split="train", processor=processor,
+        tasks=tasks, split="train", processor=processor, forms=forms,
         tokenizer=tokenizer, n_frames=trained["frames"],
         radar_tokens=encoder.n_tokens,
         samples=args.steps * args.prompts * 4, all_profiles=True,
         radar_dropout=0.0, seed=args.seed)
-    loader = DataLoader(dataset, batch_size=1, shuffle=True,
-                        num_workers=args.workers,
+    sampler = None
+    if world > 1:
+        from torch.utils.data.distributed import DistributedSampler
+        sampler = DistributedSampler(dataset, num_replicas=world, rank=rank,
+                                     shuffle=True, seed=args.seed)
+    loader = DataLoader(dataset, batch_size=1, shuffle=(sampler is None),
+                        sampler=sampler, num_workers=args.workers,
                         collate_fn=build_collate(processor, tokenizer,
                                                  trained["max_length"]))
     counts = dataset.task_counts()
@@ -214,7 +269,14 @@ def main(argv=None):
     injector = RadarInjector(llm.get_input_embeddings(), pad_id)
     header = tokenizer("<|im_start|>assistant\n",
                        add_special_tokens=False)["input_ids"]
-    reward_fn = REWARDS[args.reward]
+    if args.reward == PER_TASK:
+        from training.task_scorers import reward_for
+        missing = [t for t in tasks if reward_for(t) is None]
+        if missing:
+            raise SystemExit(f"no checkable reward for {', '.join(missing)} -- "
+                             "free-text tasks cannot be trained with RLVR")
+        log("reward: per-task, from training.task_scorers")
+    reward_fn = None if args.reward == PER_TASK else REWARDS[args.reward]
     trainable = [p for p in llm.parameters() if p.requires_grad]
     optimiser = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95),
                                   weight_decay=0.0)
@@ -254,6 +316,16 @@ def main(argv=None):
             if isinstance(loss, torch.Tensor):
                 (loss / len(batch_groups)).backward()
                 total += float(loss)
+        if world > 1:
+            # Averaged by hand rather than through DDP's autograd hooks: a rank
+            # whose whole batch had zero advantage runs no backward at all, and
+            # DDP treats a parameter that received no gradient as an error.
+            for p in trainable:
+                if p.grad is None:
+                    p.grad = torch.zeros_like(p)
+                torch.distributed.all_reduce(p.grad,
+                                             op=torch.distributed.ReduceOp.SUM)
+                p.grad /= world
         grad_norm = float(torch.nn.utils.clip_grad_norm_(trainable, 1.0))
         optimiser.step()
         step += 1
@@ -280,7 +352,9 @@ def main(argv=None):
         sensor = batch.pop("sensor", None)
         if sensor is not None:
             sensor = sensor.to(device)
-        batch.pop("task", None)
+        item_tasks = batch.pop("task", None)
+        item_task = item_tasks[0] if item_tasks else tasks[0]
+        batch.pop("clip_id", None)
         labels = batch.pop("labels")
         tensors = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
 
@@ -314,7 +388,11 @@ def main(argv=None):
 
         texts = [tokenizer.decode(s[cut:], skip_special_tokens=True)
                  for s in sampled]
-        group_rewards = [reward_fn(t, reference) for t in texts]
+        scorer = reward_fn or resolve_reward(args.reward, item_task)
+        # Tracking rewards read the prompt: the ids an answer has to reuse are
+        # named in its history block, not in the label.
+        asked = tokenizer.decode(sampled[0][:cut], skip_special_tokens=True)
+        group_rewards = [_score(scorer, t, reference, asked) for t in texts]
         if step < 1 and not history:
             log(f"reference: {reference[:70]!r}")
             for text, r in zip(texts[:4], group_rewards[:4]):
@@ -334,19 +412,33 @@ def main(argv=None):
 
         if len(pending) >= args.prompts * args.group:
             pending = flush(pending)
-            if args.save_every and step % args.save_every == 0:
+            # Ranks hold identical weights after the averaged step, so one
+            # writer is enough and five would race on the same files.
+            if args.save_every and step % args.save_every == 0 and rank == 0:
                 torch.save({"args": vars(args), "history": history},
                            os.path.join(args.out, "history.pt"))
+                llm.save_pretrained(os.path.join(args.out, "model"),
+                                    safe_serialization=True)
+                torch.save({"connector": connector.state_dict(),
+                            "encoder": encoder.state_dict(),
+                            "args": {**trained, **vars(args)},
+                            "history": history},
+                           os.path.join(args.out, "adapters.pt"))
 
     injector.remove()
-    llm.save_pretrained(os.path.join(args.out, "model"), safe_serialization=True)
-    torch.save({"connector": connector.state_dict(),
-                "encoder": encoder.state_dict(),
-                "args": {**trained, **vars(args)}, "history": history},
-               os.path.join(args.out, "adapters.pt"))
-    with open(os.path.join(args.out, "history.json"), "w") as fh:
-        json.dump(history, fh, indent=2)
-    log(f"saved to {args.out}")
+    if rank == 0:
+        llm.save_pretrained(os.path.join(args.out, "model"),
+                            safe_serialization=True)
+        torch.save({"connector": connector.state_dict(),
+                    "encoder": encoder.state_dict(),
+                    "args": {**trained, **vars(args)}, "history": history},
+                   os.path.join(args.out, "adapters.pt"))
+        with open(os.path.join(args.out, "history.json"), "w") as fh:
+            json.dump(history, fh, indent=2)
+        log(f"saved to {args.out}")
+    if world > 1:
+        torch.distributed.barrier()
+        torch.distributed.destroy_process_group()
     return 0
 
 

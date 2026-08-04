@@ -77,36 +77,47 @@ def _iou(a, b):
 
 
 def parse_objects(text):
-    out = []
-    for part in (text or "").split(";"):
-        m = OBJECT_BBOX.search(part)
-        if m:
-            box = [float(m.group(k)) for k in ("x1", "y1", "x2", "y2")]
-            out.append({"tid": int(m.group("tid")) if m.group("tid") else None,
-                        "cls": m.group("cls"), "bbox": box,
-                        "x": None, "y": None, "z": None,
-                        "rng": None, "az": None, "has_az": False,
-                        "moving": (m.group("motion") or "").strip() == "moving"})
+    """Every object in an answer, whatever separates them.
+
+    This used to split on ';', which the object lists use but the moving /
+    stationary answer does not -- it separates with commas, inside a sentence
+    that also contains commas within coordinate tuples. The effect was silent:
+    one object parsed out of four, so that task's F1 was computed from a quarter
+    of its answer. Scanning the whole string with each form's pattern and
+    dropping overlaps has no separator to get wrong.
+    """
+    found = []
+    for pattern, kind in ((OBJECT_BBOX, "bbox"), (OBJECT_XYZ, "xyz"),
+                          (OBJECT, "polar")):
+        for m in pattern.finditer(text or ""):
+            found.append((m.start(), m.end(), kind, m))
+    out, taken = [], []
+    # Longest first at each position, so "automobile [1, 2, 3, 4]" is read as a
+    # box rather than as a class with no geometry.
+    for start, end, kind, m in sorted(found, key=lambda f: (f[0], -(f[1] - f[0]))):
+        if any(start < b and a < end for a, b in taken):
             continue
-        m = OBJECT_XYZ.search(part)
-        if m:
+        taken.append((start, end))
+        tid = int(m.group("tid")) if m.groupdict().get("tid") else None
+        moving = (m.groupdict().get("motion") or "").strip() == "moving"
+        if kind == "bbox":
+            out.append({"tid": tid, "cls": m.group("cls"),
+                        "bbox": [float(m.group(k)) for k in ("x1", "y1", "x2", "y2")],
+                        "x": None, "y": None, "z": None, "rng": None, "az": None,
+                        "has_az": False, "moving": moving})
+        elif kind == "xyz":
             x, y = float(m.group("x")), float(m.group("y"))
-            out.append({"tid": int(m.group("tid")) if m.group("tid") else None,
-                        "cls": m.group("cls"), "x": x, "y": y,
-                        "z": float(m.group("z")),
-                        "rng": math.hypot(x, y), "has_az": True,
-                        "az": math.degrees(math.atan2(y, x)),
-                        "moving": (m.group("motion") or "").strip() == "moving"})
-            continue
-        m = OBJECT.search(part)
-        if not m:
-            continue
-        az = m.group("az")
-        out.append({"tid": int(m.group("tid")) if m.group("tid") else None,
-                    "cls": m.group("cls"), "rng": float(m.group("rng")),
-                    "az": float(az) if az is not None else 0.0,
-                    "has_az": az is not None, "x": None, "y": None, "z": None,
-                    "moving": (m.group("motion") or "").strip() == "moving"})
+            out.append({"tid": tid, "cls": m.group("cls"), "x": x, "y": y,
+                        "z": float(m.group("z")), "rng": math.hypot(x, y),
+                        "az": math.degrees(math.atan2(y, x)), "has_az": True,
+                        "bbox": None, "moving": moving})
+        else:
+            az = m.group("az")
+            out.append({"tid": tid, "cls": m.group("cls"),
+                        "rng": float(m.group("rng")),
+                        "az": float(az) if az is not None else 0.0,
+                        "has_az": az is not None, "x": None, "y": None,
+                        "z": None, "bbox": None, "moving": moving})
     return out
 
 
@@ -199,6 +210,44 @@ def score_waypoints(generated, reference):
     return out
 
 
+# "+1s 8.9 m/s, yaw +0.4 deg/s"
+CONTROL = re.compile(r"\+(\d)s\s+(-?\d+(?:\.\d+)?)\s*m/s\s*,\s*yaw\s*"
+                     r"([+-]?\d+(?:\.\d+)?)\s*deg/s")
+
+
+def score_control(generated, reference):
+    """Speed and yaw rate at each horizon, over the horizons both mention."""
+    got = {int(h): (float(v), float(w)) for h, v, w in CONTROL.findall(generated or "")}
+    want = {int(h): (float(v), float(w)) for h, v, w in CONTROL.findall(reference or "")}
+    shared = sorted(set(got) & set(want))
+    out = {"n": 1, "horizons": len(shared), "expected": len(want),
+           "speed_err": 0.0, "yaw_err": 0.0}
+    for h in shared:
+        out["speed_err"] += abs(got[h][0] - want[h][0])
+        out["yaw_err"] += abs(got[h][1] - want[h][1])
+    return out
+
+
+LEAVES = "leaves the forward sector"
+# "+2s leaves the forward sector"
+HORIZON_GONE = re.compile(r"\+(\d)s\s+leaves the forward sector")
+# "+1s [117, 445, 387, 772]"
+HORIZON_BBOX = re.compile(r"\+(\d)s\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*"
+                          r"(\d+)\s*,\s*(\d+)\s*\]")
+
+
+def _horizons(text):
+    """{horizon: value} where value is (range, az), a box, or None for gone."""
+    out = {}
+    for h, r, a in HORIZON.findall(text or ""):
+        out[int(h)] = ("polar", float(r), float(a))
+    for h, x1, y1, x2, y2 in HORIZON_BBOX.findall(text or ""):
+        out[int(h)] = ("bbox", [float(x1), float(y1), float(x2), float(y2)])
+    for h in HORIZON_GONE.findall(text or ""):
+        out[int(h)] = ("gone",)
+    return out
+
+
 def score_trajectory(generated, reference):
     got = {int(h): (float(r), float(a)) for h, r, a in HORIZON.findall(generated or "")}
     want = {int(h): (float(r), float(a)) for h, r, a in HORIZON.findall(reference or "")}
@@ -257,9 +306,12 @@ def score_text(generated, reference):
 SCORERS = {
     "det_objects_azdeg": score_objects,
     "det_objects_3dbbox": score_objects,
-    "motion_seg": score_objects,
-    "plan_ego": score_waypoints,
-    "agent_traj": score_trajectory,
+    "motion_seg_azdeg": score_objects,
+    "motion_seg_bbox": score_objects,
+    "plan_ego_xy": score_waypoints,
+    "plan_ego_control": score_control,
+    "agent_traj_azdeg": score_trajectory,
+    "agent_traj_bbox": score_trajectory,
     "radar_probe": score_quantity,
     "radar_transfer": score_quantity,
     "radar_structure": score_quantity,
@@ -349,7 +401,7 @@ def summarise(task, records, correlation=None):
 # Tolerances: the error at which a prediction is worth half credit. Set from the
 # scale each task works at, not tuned -- ego waypoints live within a couple of
 # metres over 3 s, an agent's range spans tens.
-HALF_CREDIT = {"plan_ego": 1.0, "agent_traj": 5.0, "agent_traj_az": 10.0}
+HALF_CREDIT = {"plan_ego": 1.0, "agent_traj": 2.0, "agent_traj_az": 5.0}
 
 
 def _f1(tp, fp, fn):
@@ -385,13 +437,48 @@ def reward_waypoints(generated, reference):
 
 
 def reward_trajectory(generated, reference):
-    s = score_trajectory(generated, reference)
+    """Per horizon, and "it will be gone" counts as an answer.
+
+    A track survives all three horizons only 51.4% of the time, so predicting
+    that it leaves the sector is the common case rather than an edge one, and
+    scoring it as a missing horizon would pay a model for saying nothing.
+    Boxes are scored by IoU and world positions by metres; the horizons are
+    compared one by one so a right answer at +1s still counts when the object is
+    gone by +2s.
+    """
+    got, want = _horizons(generated), _horizons(reference)
+    if not want:
+        return 0.0
+    total = 0.0
+    for h, truth in want.items():
+        mine = got.get(h)
+        if mine is None or mine[0] != truth[0]:
+            continue
+        if truth[0] == "gone":
+            total += 1.0
+        elif truth[0] == "bbox":
+            total += _iou(mine[1], truth[1])
+        else:
+            rng = _decay(abs(mine[1] - truth[1]), HALF_CREDIT["agent_traj"])
+            az = _decay(abs(mine[2] - truth[2]), HALF_CREDIT["agent_traj_az"])
+            total += 0.5 * (rng + az)
+    return float(total / len(want))
+
+
+def reward_control(generated, reference):
+    """Half speed, half yaw rate, scaled by how many horizons were answered.
+
+    Half credit at 1 m/s and at 3 deg/s. Those are the scales the quantities
+    move on over three seconds -- the ego's speed spans 6.5 to 10.8 m/s within a
+    single clip -- so an error of that size is a real miss rather than rounding.
+    """
+    s = score_control(generated, reference)
     if not s["horizons"]:
         return 0.0
     covered = s["horizons"] / max(s["expected"], 1)
-    rng = _decay(s["range_err"] / s["horizons"], HALF_CREDIT["agent_traj"])
-    az = _decay(s["az_err"] / s["horizons"], HALF_CREDIT["agent_traj_az"])
-    return float(covered * 0.5 * (rng + az))
+    speed = _decay(s["speed_err"] / s["horizons"], 1.0)
+    yaw = _decay(s["yaw_err"] / s["horizons"], 3.0)
+    return float(covered * 0.5 * (speed + yaw))
 
 
 def reward_quantity(generated, reference):
@@ -422,9 +509,12 @@ def reward_choice(generated, reference):
 REWARDS = {
     "det_objects_azdeg": reward_objects,
     "det_objects_3dbbox": reward_objects,
-    "motion_seg": reward_objects,
-    "plan_ego": reward_waypoints,
-    "agent_traj": reward_trajectory,
+    "motion_seg_azdeg": reward_objects,
+    "motion_seg_bbox": reward_objects,
+    "plan_ego_xy": reward_waypoints,
+    "plan_ego_control": reward_control,
+    "agent_traj_azdeg": reward_trajectory,
+    "agent_traj_bbox": reward_trajectory,
     "radar_probe": reward_quantity,
     "radar_transfer": reward_quantity,
     "depth_range": reward_quantity,
@@ -529,7 +619,16 @@ def split_rationale(text):
     return (m.group(1), m.group(2)) if m else (None, text)
 
 
-def reward_with_rationale(task, generated, reference, rationale_weight=0.3):
+def _call_reward(fn, generated, reference, prompt):
+    """Call a reward, passing the prompt only to the ones that take one."""
+    try:
+        return fn(generated, reference, prompt)
+    except TypeError:
+        return fn(generated, reference)
+
+
+def reward_with_rationale(task, generated, reference, rationale_weight=0.3,
+                          prompt=None):
     """Score the answer, and separately score the reasoning that produced it.
 
     The rationale in this dataset is not commentary: it states the radar
@@ -546,7 +645,7 @@ def reward_with_rationale(task, generated, reference, rationale_weight=0.3):
     base = reward_for(task) or reward_description
     got_rationale, got_answer = split_rationale(generated)
     want_rationale, want_answer = split_rationale(reference)
-    answer = base(got_answer, want_answer)
+    answer = _call_reward(base, got_answer, want_answer, prompt)
     if want_rationale is None:
         return float(answer)
     if got_rationale is None:
@@ -571,14 +670,16 @@ def _cot_reward(base):
     inside the rationale, so a right answer with an invented rationale and a
     wrong answer with a copied one were scored the same.
     """
-    def reward(generated, reference):
-        return reward_with_rationale(base, generated, reference)
+    def reward(generated, reference, prompt=None):
+        return reward_with_rationale(base, generated, reference, prompt=prompt)
     reward.__name__ = f"reward_with_rationale[{base}]"
     return reward
 
 
-for _base in ("det_objects_azdeg", "det_objects_3dbbox", "plan_ego",
-              "agent_traj", "world_model", "depth_range", "motion_seg", "qa"):
+for _base in ("det_objects_azdeg", "det_objects_3dbbox", "plan_ego_xy",
+              "plan_ego_control", "agent_traj_azdeg", "agent_traj_bbox",
+              "motion_seg_azdeg", "motion_seg_bbox",
+              "qa", "track_step_azdeg", "track_step_bbox"):
     REWARDS[f"{_base}_cot"] = _cot_reward(_base)
 
 

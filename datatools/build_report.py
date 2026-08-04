@@ -128,8 +128,38 @@ def styles():
     return s
 
 
+_CELL = {}
+
+
+def _cell(text, bold=False, right=False):
+    """Cell contents as a Paragraph so ReportLab wraps them.
+
+    A plain string in a Table is drawn as one unbroken line: it does not wrap,
+    it simply runs past the column and over whatever is beside it. Hand-placed
+    newlines only hide that until someone writes a longer sentence. Paragraphs
+    wrap to the column width, and they render the inline <b> that a plain cell
+    was printing as literal text.
+    """
+    if not isinstance(text, str):
+        return text
+    key = (bold, right)
+    if key not in _CELL:
+        from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+        _CELL[key] = ParagraphStyle(
+            f"cell{bold}{right}", fontName="Nanum-Bold" if bold else "Nanum",
+            fontSize=8, leading=10.6, alignment=TA_RIGHT if right else TA_LEFT,
+            textColor=colors.HexColor("#1a1a1a"))
+    # The newlines in these literals were hand-placed back when cells could not
+    # wrap at all. Keeping them as <br/> now fights the automatic wrapping and
+    # breaks sentences mid-clause, so they collapse to spaces.
+    return Paragraph(" ".join(text.split()), _CELL[key])
+
+
 def table(data, widths, align_right=(), highlight=()):
-    t = Table(data, colWidths=widths, hAlign="LEFT")
+    right = set(align_right)
+    body = [[_cell(c, bold=(r == 0 or r in highlight), right=(r > 0 and i in right))
+             for i, c in enumerate(row)] for r, row in enumerate(data)]
+    t = Table(body, colWidths=widths, hAlign="LEFT", repeatRows=1)
     style = [
         ("FONTNAME", (0, 0), (-1, 0), "Nanum-Bold"),
         ("FONTNAME", (0, 1), (-1, -1), "Nanum"),

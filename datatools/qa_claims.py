@@ -51,6 +51,14 @@ P_EGO_POS = re.compile(rf"{EGO.pattern}[^;]{{0,40}}?"
 P_EGO_SPEED = re.compile(rf"{EGO.pattern}[^;]{{0,60}}?"
                          rf"(?:speed|velocity|travelling at|moving at)"
                          rf"[^;]{{0,15}}?{NUM}\s*m/s", re.I)
+# "the red automobile ... has a speed of 6.79 m/s". The ego pattern demands an
+# ego mention, so these never matched anything -- and they are the single
+# largest form the extractor was missing: 8.1% of the rationales that produced
+# no claim at all contain one. `(?<!ego )` alone is not enough because the
+# subject can be several words back, so the sentence is rejected later if it
+# names the ego at all.
+P_AGENT_SPEED = re.compile(rf"(?:speed|velocity)\s+of\s+{NUM}\s*m/s", re.I)
+
 P_FUTURE = re.compile(rf"(?:predicted|projected|will be|expected)[^;]{{0,40}}?"
                       rf"t\s*=\s*{NUM}\s*s[^(;]{{0,40}}{POS}", re.I)
 P_ANY_POS = re.compile(rf"pos(?:ition)?\s*(?:=|is|of|at)?\s*{POS}", re.I)
@@ -165,7 +173,27 @@ def extract(rationale):
                                      (base + m.start(2), base + m.end(2))],
                            "sentence": sentence})
 
+        if not EGO.search(sentence):
+            # Only when the sentence is about another object; an ego speed is
+            # already covered and would be checked against the wrong thing.
+            for m in P_AGENT_SPEED.finditer(sentence):
+                claims.append({"kind": "agent_speed", "frame": frame,
+                               "value": float(m.group(1)),
+                               "spans": [(base + m.start(1), base + m.end(1))],
+                               "sentence": sentence})
+
         for m in P_DISTANCE.finditer(sentence):
+            # "the ego vehicle's X-position is 349.69m" is a coordinate, not a
+            # distance, and reading it as one compared an absolute position
+            # against a gap of a few metres -- 36 of the human-checked set's
+            # claims failed that way, with a median apparent error of 14 m while
+            # the arithmetic in the sentence was correct. Only the newer QA
+            # writes positions in this form, which is why it never showed up
+            # before. Variable-length lookbehind is not available, so the words
+            # just before the match are inspected instead.
+            before = sentence[max(0, m.start() - 40):m.start()].lower()
+            if any(w in before for w in ("position", "coordinate", "pos=")):
+                continue
             claims.append({"kind": "distance", "frame": frame,
                            "value": float(m.group(1)),
                            "spans": [(base + m.start(1), base + m.end(1))],

@@ -29,8 +29,9 @@ from torch.utils.data import DataLoader
 from training.task_scorers import scorer_for, summarise
 
 ALL = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
-       "track_step_bbox", "plan_ego", "agent_traj", "world_model",
-       "depth_range", "motion_seg", "radar_transfer", "retrieval", "qa",
+       "track_step_bbox", "plan_ego_xy", "plan_ego_control",
+       "agent_traj_azdeg", "agent_traj_bbox",
+       "motion_seg_azdeg", "motion_seg_bbox", "radar_transfer", "qa",
        "desc_radar", "desc_complementarity", "desc_objects",
        "desc_ego_maneuver", "desc_clip_summary", "radar_probe")
 # How long an answer each task needs. Object lists run to eight entries; the
@@ -39,7 +40,10 @@ ALL = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
 # silently gets the short default and has its answer truncated, which is why the
 # names here have to track the task list rather than drift behind it.
 MAX_NEW = {"det_objects_azdeg": 200, "det_objects_3dbbox": 240,
-           "track_step_azdeg": 260, "track_step_bbox": 300, "motion_seg": 260,
+           "track_step_azdeg": 260, "track_step_bbox": 300,
+           "motion_seg_azdeg": 280, "motion_seg_bbox": 320,
+           "agent_traj_azdeg": 100, "agent_traj_bbox": 120,
+           "plan_ego_xy": 80, "plan_ego_control": 110,
            "desc_radar": 120, "desc_complementarity": 120, "desc_objects": 120,
            "desc_ego_maneuver": 80, "desc_clip_summary": 160, "retrieval": 60,
            "qa": 8}
