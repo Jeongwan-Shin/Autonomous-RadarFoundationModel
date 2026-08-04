@@ -93,6 +93,8 @@ def build(story, s):
          "11개 태스크, 카메라와 레이더의 근거를 나란히 놓고 융합"],
         ["프레임 아이템", "9,076,730 행", f"{d['frame_items']['rows']:,} 행 "
          f"({d['frame_items']['bytes']/1e9:.1f} GB)"],
+        ["학습 아이템", "-", f"{d['totals']['train']:,} (train + val 병합)"],
+        ["평가 아이템", "-", f"{d['totals']['test']:,}"],
         ["QA 학습", "1,999 클립 / 39,158 문항",
          f"{d['qa_train']['clips']:,} 클립 / {d['qa_train']['questions']:,} 문항"],
         ["QA 평가", "sha1 로 고른 99 클립",
@@ -147,7 +149,7 @@ def build(story, s):
     # ------------------------------------------------------------ tasks
     story.append(PageBreak())
     P("2. 태스크별 정의", "h1")
-    rows = [["번호", "태스크", "입력", "앵커", "아이템"]]
+    rows = [["번호", "태스크", "입력", "앵커", "학습", "평가"]]
     spec = [
         ("1.1", "det_objects_azdeg", "비전 1장 · 레이더 1초 · ego 1"),
         ("1.2", "det_objects_3dbbox", "〃"),
@@ -164,9 +166,10 @@ def build(story, s):
         anchors = d["anchors"].get(task, [])
         rows.append([no, task, inp,
                      f"{len(anchors)}개" if anchors else "--",
-                     f"{total(task):,}"])
-    story.append(table(rows, [14 * mm, 40 * mm, 55 * mm, 16 * mm, 22 * mm],
-                       align_right=(4,)))
+                     f"{n.get(task, {}).get('train', 0):,}",
+                     f"{n.get(task, {}).get('test', 0):,}"])
+    story.append(table(rows, [13 * mm, 37 * mm, 48 * mm, 14 * mm, 20 * mm, 18 * mm],
+                       align_right=(4, 5)))
     gap(4)
     P("각 태스크에 같은 이름의 " + M("_cot") + " 변형이 있고, 근거를 앞에 붙인 "
       "JSON 형식입니다. 보상은 <b>answer 0.7 + rationale 0.3</b>입니다.", "small")
@@ -267,6 +270,8 @@ def build(story, s):
         ["", "클립", "문항", "성격"],
         ["qa (기존)", "1,999", "39,158", "수정 완료본"],
         ["qa_8000 (신규)", "8,000", "160,032 → 156,716", "검증·수정 적용"],
+        ["agent_speed 추가 후 재검증", "-", "-",
+         "검증 가능 34.0% → 38.2%, 주장 일치 99.3%"],
         ["→ qa_train (병합)", f"{d['qa_train']['clips']:,}",
          f"{d['qa_train']['questions']:,}", "학습"],
         ["qa_gt (신규)", f"{d['qa_gt']['clips']}", f"{d['qa_gt']['questions']:,}",
@@ -292,6 +297,36 @@ def build(story, s):
     gap(3)
     P("결과: 3,334 문항(2.1%) 제거, 1,800 항목의 rationale 수정. 재검증 후 "
       "<b>주장 단위 일치율 100%</b>로 기존 qa 와 같은 기준이 됐습니다.")
+    gap(4)
+    P("5.3 추출기를 넓혔다 — agent_speed", "h2")
+    P("검증되지 않은 문항을 표본으로 조사하니, <b>86% 가 숫자를 갖고 있는데 추출기가 "
+      "청구항으로 잡지 못하는</b> 상태였습니다. 숫자가 아예 없는 것은 13.7% 뿐입니다. "
+      "가장 큰 단일 형태가 타 객체의 속도로, 청구항이 안 잡힌 문항의 8.1% 를 "
+      "차지했습니다 — 기존 패턴이 자차 언급을 요구해 "
+      + M("the red automobile has a speed of 6.79 m/s") + " 같은 문장을 통째로 "
+      "지나쳤습니다.")
+    P("물체별 월드 속도를 트랙마다 중심차분으로 계산해 존재 검사로 대조했습니다. "
+      "결과는 <b>1.5 m/s 이내 95.6%, 중앙값 오차 0.01 m/s</b> — QA 가 말하는 타 객체 "
+      "속도가 라벨과 거의 정확히 일치합니다. 검증 가능 비율이 34.0% 에서 38.2% 로 "
+      "올랐습니다.")
+    gap(4)
+    P("5.4 CoT 방출 규칙을 바꿨다", "h2")
+    P("이전에는 " + M('verification == "agrees"') + " 인 문항만 CoT 로 냈습니다. "
+      "그 판정은 \"숫자가 있었고 맞았다\"는 뜻이지 \"옳다\"는 뜻이 아닙니다. "
+      "남은 62% 는 " + M('unchecked') + " 인데, 그 대부분은 틀린 것이 아니라 "
+      "<b>대조할 숫자가 없는 정성 추론</b>입니다.")
+    P("규칙을 " + M('status != "disagrees"') + " 로 바꿨습니다. 수정과 제거를 거친 "
+      "지금 " + M("disagrees") + " 는 0건이므로 실질적으로 전부 방출입니다. "
+      "수치 주장이 있는 문항만 CoT 로 쓰면 모델이 배우는 추론이 <b>산술에 편향</b>되고, "
+      "QA 의 taxonomy 넷 중 Reasoning 계열을 통째로 못 배웁니다. "
+      + M("verified") + " 플래그는 남겨 두어 나중에 가중치나 별도 평가에 쓸 수 "
+      "있습니다.")
+    gap(3)
+    story.append(table([
+        ["", "이전 (agrees 만)", "이후 (모순 아닌 전부)"],
+        ["qa_cot 학습", "56,522", f"{n.get('qa_cot', {}).get('train', 0):,}"],
+        ["qa_cot 평가", "0", f"{n.get('qa_cot', {}).get('test', 0):,}"],
+    ], [30 * mm, 40 * mm, 45 * mm], align_right=(1, 2)))
     gap(4)
 
     P("5.2 검증기가 틀렸던 지점", "h2")
@@ -373,6 +408,11 @@ def build(story, s):
         ["radar_object_probes / radar_structure_probes", "평가 전용 프로브"],
     ], [66 * mm, 81 * mm]))
     gap(4)
+    gap(3)
+    P("<b>val 을 train 에 합쳤습니다.</b> 클립 분할이 train 86,607 / val 54,163 / "
+      "test 37,121 인데, 모델 선택을 test 에서 하므로 검증용 3분의 1이 쓰이지 않고 "
+      "있었습니다. test 는 그대로입니다.")
+    gap(3)
     P("<b>다음에 해야 할 일</b>")
     P("① 04·05·09 재정의 — 이번 빌드에서 보류한 세 태스크")
     P("② 축차 추적 평가기 검증 — " + M("eval_tracking.py") + "를 실제 데이터로 확인. "
