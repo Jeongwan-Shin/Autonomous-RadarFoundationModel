@@ -9,6 +9,10 @@ runs/
 *.zip
 checkpoints/
 
+# Notebooks are committed without outputs; the executed copies are a
+# local verification artefact, not source.
+*_executed.ipynb
+
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/

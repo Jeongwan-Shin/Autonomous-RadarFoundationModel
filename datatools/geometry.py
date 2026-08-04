@@ -138,3 +138,108 @@ def points_in_box(points, center, size, quaternion, margin=1.3):
     local = (points - center) @ rot
     half = np.asarray(size, dtype=float) / 2.0 * margin
     return np.all(np.abs(local) <= half, axis=-1)
+
+
+# --------------------------------------------------------------------------
+# camera projection
+# --------------------------------------------------------------------------
+#
+# The front wide camera is an f-theta (fisheye-family) 120 deg lens, not a
+# pinhole, so `K @ [x, y, z]` does not apply. The calibration supplies the
+# forward polynomial directly -- angle from the optical axis to pixel distance
+# from the principal point -- which is all a projection needs; the inverse
+# polynomial it also ships is for unprojection and is not used here.
+
+def ftheta_project(points_cam, model):
+    """Camera-frame points to pixels. NaN where a point is behind or outside.
+
+    `points_cam` is (N, 3) with z along the optical axis. `model` is the parsed
+    `model_parameters` JSON: `principal_point`, `angle_to_pixeldist_poly`,
+    `max_angle`, `linear_cde`, `resolution`.
+
+    Points beyond `max_angle` are dropped rather than clamped. The polynomial is
+    only fitted inside the lens's field of view, and evaluating it outside
+    returns a plausible-looking pixel for a direction the camera cannot see --
+    which would put a box on an object that is not in the image.
+    """
+    xyz = np.asarray(points_cam, dtype=np.float64)
+    if xyz.ndim == 1:
+        xyz = xyz[None, :]
+    radial = np.hypot(xyz[:, 0], xyz[:, 1])
+    theta = np.arctan2(radial, xyz[:, 2])
+
+    poly = np.asarray(model["angle_to_pixeldist_poly"], dtype=np.float64)
+    # Stored lowest-order first; polyval wants the reverse.
+    distance = np.polyval(poly[::-1], theta)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        scale = np.where(radial > 1e-9, distance / radial, 0.0)
+    x = xyz[:, 0] * scale
+    y = xyz[:, 1] * scale
+
+    c, d, e = model.get("linear_cde", [1.0, 0.0, 0.0])
+    u = c * x + d * y
+    v = e * x + y
+
+    cx, cy = model["principal_point"]
+    pixels = np.column_stack([u + cx, v + cy])
+    outside = (theta > model["max_angle"]) | (xyz[:, 2] <= 0)
+    pixels[outside] = np.nan
+    return pixels
+
+
+def box_corners(center, size, quaternion):
+    """The eight corners of an oriented 3D box, in the box's parent frame."""
+    l, w, h = size
+    unit = np.array([[sx, sy, sz]
+                     for sx in (-0.5, 0.5)
+                     for sy in (-0.5, 0.5)
+                     for sz in (-0.5, 0.5)], dtype=np.float64)
+    local = unit * np.array([l, w, h], dtype=np.float64)
+    rot = Rotation.from_quat(np.asarray(quaternion, dtype=np.float64))
+    return rot.apply(local) + np.asarray(center, dtype=np.float64)
+
+
+def rig_to_camera(points_rig, cam_rot, cam_translation):
+    """Rig points into the camera frame.
+
+    `cam_rot` is a rotation matrix, as `extrinsics_to_matrix` returns -- the
+    same convention `sensor_to_rig` takes, so the two stay interchangeable.
+
+    The extrinsics give the camera's pose *in* the rig, so a point needs the
+    inverse transform: subtract the camera's position, then rotate by the
+    transpose. `sensor_to_rig` is `p @ R.T + t`; this is its inverse.
+    """
+    shifted = np.asarray(points_rig, dtype=np.float64) - np.asarray(
+        cam_translation, dtype=np.float64)
+    return shifted @ np.asarray(cam_rot, dtype=np.float64)
+
+
+def image_bbox(center, size, quaternion, cam_rot, cam_translation, model,
+               min_visible=4):
+    """Axis-aligned image box for a 3D box, or None if it is not visible.
+
+    Built from the projected corners rather than from the centre and a scale:
+    an f-theta lens bends straight lines, so a box's image extent is not a
+    rectangle around its projected centre, and near the edge of the frame the
+    difference is tens of pixels.
+
+    `min_visible` guards against a box that is mostly behind the camera, where
+    one or two corners project to a corner of the frame and imply a box that
+    covers half the image.
+    """
+    corners = box_corners(center, size, quaternion)
+    pixels = ftheta_project(rig_to_camera(corners, cam_rot, cam_translation),
+                            model)
+    good = pixels[~np.isnan(pixels).any(axis=1)]
+    if len(good) < min_visible:
+        return None
+    width, height = model["resolution"]
+    x1, y1 = good.min(axis=0)
+    x2, y2 = good.max(axis=0)
+    # Clip to the sensor, then reject anything that falls off it entirely.
+    x1, x2 = np.clip([x1, x2], 0, width - 1)
+    y1, y2 = np.clip([y1, y2], 0, height - 1)
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return None
+    return [float(x1), float(y1), float(x2), float(y2)]

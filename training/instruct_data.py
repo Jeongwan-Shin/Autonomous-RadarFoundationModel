@@ -6,7 +6,7 @@ and only the instruction changes -- so a single set of weights answers all of
 them and the task is a property of the prompt, not of an output head.
 
   det_objects     01  class, range and azimuth of each road user ahead
-  track_identity  02  the same objects keyed by track id, with track age
+  track_step      02  detections at t-4..t-1 in, objects at t out, ids carried
   plan_ego        03-1 future ego waypoints, (x, y) metres, forward-positive
   agent_traj      03-2 one agent's future range/azimuth over 3 s
   world_model     04  the scene 3 s on, conditioned on the ego action
@@ -73,9 +73,31 @@ SYSTEM = ("You are a driving-scene assistant. You receive 20 video frames at 1 H
 # a real sensor profile, or `radar_dropout` -- the target is replaced rather than
 # kept, because training the original answer against a blank radar is precisely
 # how a model learns to recite radar statistics it never read.
+# Tasks answered from one instant rather than from the whole clip. They take a
+# single video frame and the twenty radar scans immediately before that instant
+# -- one second on LRR and MRR -- instead of twenty frames sampled at 1 Hz.
+#
+# The default input throws away 95% of the radar: the sensor runs at 20 Hz and
+# only one scan per second survives. For a question about what is ahead *now*,
+# the nineteen seconds of other context answer nothing the question asks, while
+# the discarded scans carry the Doppler track that does. The vision side costs
+# 78 tokens instead of 1,560 for the same reason -- one instant needs one image.
+INSTANT_TASKS = frozenset({"det_objects_azdeg", "det_objects_3dbbox",
+                           "det_objects_azdeg_cot",
+                           "det_objects_3dbbox_cot"})
+
+# Tracking sees a history, not an instant and not the whole clip: five seconds
+# of it. The vision side is five frames at 1 Hz and the radar twenty scans at
+# 4 Hz, so both cover the same five seconds at the resolution each is useful at
+# -- the camera to recognise, the radar to measure how things are moving.
+WINDOW_TASKS = frozenset({"track_step_azdeg", "track_step_bbox"})
+WINDOW_SECONDS = 5
+WINDOW_RADAR_HZ = 4
+WINDOW_FRAMES = 5
+
 RADAR_ONLY_TASKS = frozenset({
     "radar_probe", "radar_probe_coarse", "radar_transfer", "motion_seg",
-    "radar_structure",
+    "radar_structure", "radar_objects", "det_objects_cot", "depth_range_cot",
     "motion_seg_cot", "agent_traj_cot", "depth_range", "desc_radar",
     "desc_complementarity",
 })
@@ -86,8 +108,11 @@ SENSOR_LABEL = {"lrr1": "imaging long-range radar",
                 "srr0": "short-range radar"}
 
 # Tasks pre-serialised by datatools.frame_objects into one parquet.
-FRAME_ITEM_TASKS = ("det_objects", "track_identity", "plan_ego", "agent_traj",
-                    "world_model", "depth_range", "motion_seg")
+# `det_objects` split in two: the input is identical and the instruction picks
+# the representation, which is the premise of the model stated as a task pair.
+FRAME_ITEM_TASKS = ("det_objects_azdeg", "det_objects_3dbbox",
+                    "track_step_azdeg", "track_step_bbox", "plan_ego",
+                    "agent_traj", "world_model", "depth_range", "motion_seg")
 
 # Same questions, but the answer is {"rationale": ..., "answer": ...} and the
 # rationale has to state the radar reading first. Only two tasks qualify: a
@@ -96,13 +121,15 @@ FRAME_ITEM_TASKS = ("det_objects", "track_identity", "plan_ego", "agent_traj",
 # there would just be the answer written twice. Validated on 1,296 items -- the
 # direction the rationale claims agrees with the actual range change 92% of the
 # time for closing and 80% for receding, against 52% for always guessing.
-COT_TASKS = ("agent_traj_cot", "motion_seg_cot")
+COT_TASKS = ("agent_traj_cot", "motion_seg_cot", "det_objects_azdeg_cot",
+             "det_objects_3dbbox_cot", "depth_range_cot",
+             "plan_ego_cot", "world_model_cot", "qa_cot")
 
 # What `--tasks all` means. `ood_reasoning` is not in it: 2,077 events are the
 # only human-verified text in the release, and they are worth more as an
 # evaluation set nothing was fitted to.
-ALL_TRAIN_TASKS = FRAME_ITEM_TASKS + ("radar_transfer", "retrieval", "qa",
-                                      "description", "radar_probe")
+ALL_TRAIN_TASKS = FRAME_ITEM_TASKS + ("retrieval", "qa", "description",
+                                      "radar_probe")
 
 
 def expand_tasks(spec):
@@ -172,10 +199,12 @@ DEFAULT_MIXTURE = {
     "desc_complementarity": 2.0,
     # camera- and ego-grounded
     "qa": 2.0,
-    "det_objects": 1.5,
+    "det_objects_azdeg": 1.5,
+    "det_objects_3dbbox": 1.5,
     "plan_ego": 1.5,
     "agent_traj": 1.5,
-    "track_identity": 1.0,
+    "track_step_azdeg": 1.0,
+    "track_step_bbox": 1.0,
     "world_model": 1.0,
     "retrieval": 1.0,
     "desc_objects": 1.0,
@@ -203,19 +232,24 @@ def qa_holdout():
     return frozenset(json.load(open(path))["clip_ids"])
 
 
-def load_items(tasks, split, limit_per_task=0, usable_clips=None):
+def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
     """Flat list of {clip_id, task, prompt, target, frame} records.
 
     `usable_clips` filters as items are built rather than afterwards. Filtering
     later meant a head-truncating limit picked mostly SRR-equipped clips, which
     were then dropped for lacking the long-range radar -- descriptions collapsed
     from 12,000 to 2,350 and QA ended up at 68% of the mixture.
+
+    `forms` restricts `radar_objects` to a subset of its question forms, so a run
+    can train on some and leave the rest as instruments. Training every form
+    would repeat the mistake `radar_probe` embodies: a model graded on exactly
+    what it was optimised for tells you nothing about whether it can read radar.
     """
     items = []
     root = paths.SPLIT_ROOT
     keep = None if usable_clips is None else set(usable_clips)
 
-    if "qa" in tasks:
+    if "qa" in tasks or "qa_cot" in tasks:
         # Every QA document records split='train', so the holdout clips have to
         # be admitted explicitly when `test` is asked for; filtering on the
         # recorded split alone would return nothing.
@@ -232,13 +266,34 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None):
                 continue
             for item in doc.get("qa", []):
                 options = "\n".join(f"{k}. {v}" for k, v in sorted(item["options"].items()))
-                items.append({
-                    "clip_id": doc["clip_id"], "task": "qa",
-                    "prompt": f"{item['question']}\n{options}\nAnswer with the letter.",
-                    "target": item["answer"],
-                    "frame": frame_reference(item["question"]),
-                    "verified": item.get("verification", {}).get("status") == "agrees",
-                })
+                verified = item.get("verification", {}).get("status") == "agrees"
+                if "qa" in tasks:
+                    items.append({
+                        "clip_id": doc["clip_id"], "task": "qa",
+                        "prompt": f"{item['question']}\n{options}\n"
+                                  "Answer with the letter.",
+                        "target": item["answer"],
+                        "frame": frame_reference(item["question"]),
+                        "verified": verified,
+                    })
+                # The QA release ships a worked rationale with every question --
+                # "the ego is at 5.74 m/s, the sedan at 5.22, the difference is
+                # 0.52" -- and it was going unused while the model was trained on
+                # the letter alone. Here the reasoning is genuinely upstream:
+                # the letter is whichever option the computed number lands on.
+                # Only the checked ones are emitted; 14,252 of 39,158 carry an
+                # `agrees` verdict and the rest were never checked, so training
+                # a chain of reasoning on them would teach unverified arithmetic.
+                if "qa_cot" in tasks and verified and item.get("rationale"):
+                    items.append({
+                        "clip_id": doc["clip_id"], "task": "qa_cot",
+                        "prompt": f"{item['question']}\n{options}\n"
+                                  "Reason step by step, then answer with the letter.",
+                        "target": json.dumps({"rationale": item["rationale"],
+                                              "answer": item["answer"]}),
+                        "frame": frame_reference(item["question"]),
+                        "verified": True,
+                    })
 
     if "description" in tasks:
         frame_path = os.path.join(root, "11_radar_vision_scene_description",
@@ -378,6 +433,33 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None):
                     "verified": True,
                 })
 
+    if "radar_objects" in tasks:
+        # Object-level, and trainable -- this is the one difference from
+        # `radar_structure`. Measured on 382,610 frames with both feature sets
+        # on the same rows, the nearest illuminated object's range, bearing and
+        # radial velocity explain 0.581 of `depth_range`, 0.289 of
+        # `det_objects` and 0.156 of `motion_seg`, against 0.048 / 0.023 / 0.014
+        # for the scan-level summary. A reward can only shape what it scores, so
+        # this is the granularity worth scoring.
+        #
+        # `forms` exists so some question forms can be trained while the rest
+        # stay instruments: training all of them would repeat the `radar_probe`
+        # mistake of grading a model on what it was optimised for.
+        path = os.path.join(paths.COMMON_DIR, "radar_object_probes.parquet")
+        built = pd.read_parquet(path, columns=["clip_id", "frame", "form",
+                                               "prompt", "target", "split"])
+        built = built[built["split"] == split]
+        if forms is not None:
+            built = built[built["form"].isin(forms)]
+        if keep is not None:
+            built = built[built["clip_id"].isin(keep)]
+        for row in built.itertuples():
+            items.append({
+                "clip_id": row.clip_id, "task": "radar_objects",
+                "prompt": row.prompt, "target": row.target,
+                "frame": int(row.frame) - 1, "verified": True,
+            })
+
     if "radar_structure" in tasks:
         # Evaluation only, and deliberately absent from ALL_TRAIN_TASKS: these
         # ask what `head_stats` never taught the encoder to write down, so a
@@ -489,7 +571,7 @@ class InstructDataset(Dataset):
                  n_frames=N_FRAMES, radar_tokens=RADAR_TOKENS,
                  verified_only=False, samples=0, mixture=None, seed=0,
                  max_text_tokens=512, nvidia_root=paths.NVIDIA_ROOT,
-                 all_profiles=False, radar_dropout=0.0):
+                 all_profiles=False, radar_dropout=0.0, forms=None):
         self.clips = pd.read_parquet(
             os.path.join(paths.COMMON_DIR, "nvidia_clips.parquet"))
         # Everything a sample needs that is never optional: both label streams,
@@ -534,7 +616,8 @@ class InstructDataset(Dataset):
         for clip in usable:
             self.radar_of.setdefault(clip, radar)
 
-        self.items = load_items(tasks, split, usable_clips=usable)
+        self.items = load_items(tasks, split, usable_clips=usable,
+                                forms=forms)
         if verified_only:
             self.items = [i for i in self.items if i["verified"]]
         self.available = self._counts(self.items)
@@ -618,9 +701,24 @@ class InstructDataset(Dataset):
         item = self.items[i]
         clip_id = item["clip_id"]
         name, position = self.radar_pos[clip_id]
-        radar = self.radar_ds[name][position]
+        instant = item["task"] in INSTANT_TASKS
+        window = item["task"] in WINDOW_TASKS
+        if instant:
+            # `frame` is 0-indexed and one frame is one second, so the instant
+            # asked about is t = frame seconds.
+            radar = self.radar_ds[name].window(position, float(item["frame"]))
+        elif window:
+            radar = self.radar_ds[name].window(position, float(item["frame"]),
+                                               rate_hz=WINDOW_RADAR_HZ)
+        else:
+            radar = self.radar_ds[name][position]
         frames = pad_frames(clip_frames(self.nvidia_root, self.clips.loc[clip_id]),
                             self.n_frames)
+        if instant:
+            frames = [frames[min(int(item["frame"]), len(frames) - 1)]]
+        elif window:
+            end = min(int(item["frame"]), len(frames) - 1)
+            frames = frames[max(0, end - WINDOW_FRAMES + 1):end + 1]
 
         points, mask = radar["points"], radar["mask"]
         present = self.radar_of.get(clip_id)
@@ -640,12 +738,27 @@ class InstructDataset(Dataset):
         if present is None and item["task"] in RADAR_ONLY_TASKS:
             target = NO_RADAR_ANSWER
 
-        # Ego motion stops at the frame in question; see the module docstring.
-        ego = ego_text(radar["ego_state"], item["frame"])
+        if instant:
+            # One sample, at the instant asked about. The windowed ego state is
+            # twenty readings over one second and they barely differ -- measured,
+            # 0.06 to 0.12 m/s of spread against 4.3 m/s across the whole clip --
+            # so the other nineteen repeat the same fact for about 200 tokens.
+            # What the question needs from the ego is the speed that the Doppler
+            # residual is computed against, and that is a single number.
+            ego = ego_text(radar["ego_state"][-1:], 0)
+            ego_header = f"Ego motion (binned, at t={item['frame']}s)"
+        elif window:
+            ego = ego_text(radar["ego_state"], len(radar["ego_state"]))
+            ego_header = (f"Ego motion (binned, {WINDOW_SECONDS} s at "
+                          f"{WINDOW_RADAR_HZ} Hz, ending at t={item['frame']}s)")
+        else:
+            # Ego motion stops at the frame in question; see the module docstring.
+            ego = ego_text(radar["ego_state"], item["frame"])
+            ego_header = f"Ego motion (binned, t0..t{item['frame']})"
 
         user = (f"{radar_prompt_block(self.radar_tokens)}\n"
                 f"Sensors present: {sensors}.\n"
-                f"Ego motion (binned, t0..t{item['frame']}): {ego}\n"
+                f"{ego_header}: {ego}\n"
                 f"{item['prompt']}")
         return {"clip_id": clip_id, "task": item["task"],
                 "frames": frames, "user": user, "target": target,
@@ -707,6 +820,8 @@ def build_collate(processor, tokenizer, max_length=4096):
         encoded["radar_mask"] = torch.stack([s["mask"] for s in batch])
         encoded["sensor"] = torch.stack([s["sensor"] for s in batch])
         encoded["task"] = [s["task"] for s in batch]
+        # Carried so a saved generation can be traced to the clip it describes.
+        encoded["clip_id"] = [s.get("clip_id") for s in batch]
         return encoded
 
     return collate

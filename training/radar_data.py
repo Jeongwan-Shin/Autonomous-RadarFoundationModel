@@ -116,6 +116,25 @@ class RadarClipDataset(Dataset):
         return None if obstacle.empty else obstacle
 
     def __getitem__(self, i):
+        return self.build(i, until_s=None)
+
+    def window(self, i, until_s, rate_hz=None):
+        """The last `n_frames` scans ending at `until_s`, at the sensor's own rate.
+
+        The default sampling takes one scan per second and throws away 95% of
+        what the sensor produced -- imaging LRR runs at 20 Hz, so a 20 s clip
+        holds ~399 scans and only 20 survive. For a question about one instant
+        that trade is backwards: the twenty scans immediately before that instant
+        carry the object's actual Doppler track, and the nineteen seconds of
+        other context carry nothing the question asks about.
+
+        Twenty scans is one second on LRR and MRR (20 Hz) and about 1.6 s on SRR
+        (12.7 Hz). Counting scans rather than fixing the duration keeps the
+        tensor full for every sensor instead of padding SRR with blanks.
+        """
+        return self.build(i, until_s=float(until_s), rate_hz=rate_hz)
+
+    def build(self, i, until_s=None, rate_hz=None):
         clip_id = self.clip_ids[i]
         row = self.index.loc[clip_id]
         short = self.radar
@@ -163,8 +182,29 @@ class RadarClipDataset(Dataset):
                                   1 - 2 * (qy ** 2 + qz ** 2)))
         yaw_rate = np.gradient(yaw, ego_t)
 
+        # Frame f is at t = f seconds by default; in windowed mode it is the
+        # f-th of the twenty scans that end at `until_s`, so the frame axis
+        # spans one second instead of twenty.
+        if until_s is None or len(scans) == 0:
+            times = [float(f) for f in range(F)]
+        elif rate_hz:
+            # A fixed grid ending at `until_s`: F samples at `rate_hz`, each
+            # taking the nearest real scan. This decouples the window's duration
+            # from the sensor's rate, so 20 frames at 4 Hz is five seconds on
+            # every rig -- LRR at 20 Hz and SRR at 12.7 Hz alike -- which
+            # counting scans backwards would not give.
+            grid = until_s - np.arange(F - 1, -1, -1) / float(rate_hz)
+            times = [float(scans[int(np.argmin(np.abs(scans / 1e6 - g)))]) / 1e6
+                     for g in grid]
+        else:
+            earlier = scans[scans / 1e6 <= until_s + 1e-6]
+            chosen = (earlier[-F:] if len(earlier) >= F
+                      else scans[:F] if len(scans) >= F else scans)
+            times = [float(s) / 1e6 for s in chosen]
+            times = [times[0]] * (F - len(times)) + times
+
         for f in range(F):
-            t_s = float(f)
+            t_s = times[f]
             j = int(np.argmin(np.abs(ego_t - t_s)))
             ego_state[f] = (speed[j], accel[j], np.degrees(yaw_rate[j]))
             if len(scans) == 0:

@@ -28,12 +28,18 @@ from torch.utils.data import DataLoader
 
 from training.task_scorers import scorer_for, summarise
 
-ALL = ("det_objects", "track_identity", "plan_ego", "agent_traj", "world_model",
+ALL = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
+       "track_step_bbox", "plan_ego", "agent_traj", "world_model",
        "depth_range", "motion_seg", "radar_transfer", "retrieval", "qa",
        "desc_radar", "desc_complementarity", "desc_objects",
        "desc_ego_maneuver", "desc_clip_summary", "radar_probe")
-# How long an answer each task needs. Object lists run to eight entries.
-MAX_NEW = {"det_objects": 200, "track_identity": 200, "motion_seg": 260,
+# How long an answer each task needs. Object lists run to eight entries; the
+# tracking answers carry an id and, in the bbox form, four coordinates each, so
+# they need more room than the detection ones. A task missing from this table
+# silently gets the short default and has its answer truncated, which is why the
+# names here have to track the task list rather than drift behind it.
+MAX_NEW = {"det_objects_azdeg": 200, "det_objects_3dbbox": 240,
+           "track_step_azdeg": 260, "track_step_bbox": 300, "motion_seg": 260,
            "desc_radar": 120, "desc_complementarity": 120, "desc_objects": 120,
            "desc_ego_maneuver": 80, "desc_clip_summary": 160, "retrieval": 60,
            "qa": 8}
@@ -51,12 +57,17 @@ def log(msg):
 # forms the encoder was supervised on from the one it was not.
 QUESTION_FORMS = (
     ("dBsm", "rcs"),
-    ("illuminate", "illuminated"),
-    ("At what azimuth is the nearest", "bearing"),
+    ("camera-only", "illuminated"),
+    ("azimuth is the nearest radar return", "bearing"),
     ("left of centre", "lateral"),
     ("fastest approaching", "closing"),
     ("within 20 m", "near_far"),
     ("leftmost", "spread"),
+    ("nearest object the radar illuminates, in metres", "obj_range"),
+    ("azimuth is the nearest object the radar", "obj_azimuth"),
+    ("radial velocity of the nearest object", "obj_closing"),
+    ("second nearest radar-illuminated", "obj_gap"),
+    ("how many have moving returns", "obj_moving"),
     # Before the catch-all: `radar_transfer` asks this one as "...at the 90th
     # percentile of its detections", so matching on "detections" first pooled a
     # range in metres with a count in the hundreds and inflated the correlation.
@@ -136,6 +147,13 @@ def run_task(task, args, loaded):
                        add_special_tokens=False)["input_ids"]
     scorer = scorer_for(task)
     records = {"full": [], "shuffled": []}
+    # Every generation, kept. Scoring has been wrong four times so far -- pooled
+    # question forms, a shuffle that shuffled nothing, a match threshold on an
+    # axis the task does not have, an untuned ridge penalty -- and each fix cost
+    # a full re-run of inference because only the aggregate survived. The text
+    # is what the GPU actually produced; the metric is an opinion about it, and
+    # opinions get revised.
+    generations = []
     pairs = {"full": [], "shuffled": []}
     previous, shown = None, []
 
@@ -146,6 +164,8 @@ def run_task(task, args, loaded):
         if sensor is not None:
             sensor = sensor.to(device)
         batch.pop("task", None)
+        clip_ids = batch.pop("clip_id", None)
+        clip_id = clip_ids[0] if clip_ids else None
         labels = batch.pop("labels")
         tensors = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
 
@@ -190,6 +210,11 @@ def run_task(task, args, loaded):
                 text = tokenizer.decode(out[0, cut:], skip_special_tokens=True)
                 result = scorer(text, reference)
                 records[mode].append(result)
+                generations.append({
+                    "task": task, "mode": mode, "form": form,
+                    "clip_id": clip_id, "prompt": asked[-220:],
+                    "generated": text.strip(), "reference": reference.strip(),
+                })
                 if "pred" in result and result["pred"] is not None:
                     pairs[mode].append((result["pred"], result["truth"], form))
                 if mode == "full" and len(shown) < args.show:
@@ -198,7 +223,8 @@ def run_task(task, args, loaded):
             previous = tokens.clone()
 
     injector.remove()
-    out = {"task": task, "n": len(records["full"]), "examples": shown}
+    out = {"task": task, "n": len(records["full"]), "examples": shown,
+           "generations": generations}
     def correlate(rows):
         if len(rows) < 5:
             return None
@@ -288,6 +314,18 @@ def main(argv=None):
                 print(f"      got  : {got}")
                 print(f"      truth: {want}")
     report(results)
+    if args.out:
+        # Generations go beside the summary, not inside it: they are ~200x
+        # larger and a summary should stay readable. One JSON object per line,
+        # so `rescore_generations.py` can stream them without loading the file.
+        stream = os.path.splitext(args.out)[0] + ".generations.jsonl"
+        written = 0
+        with open(stream, "w") as fh:
+            for r in results:
+                for g in r.pop("generations", []):
+                    fh.write(json.dumps(g, ensure_ascii=False) + "\n")
+                    written += 1
+        log(f"wrote {stream}  ({written:,} generations)")
     if args.out:
         with open(args.out, "w") as fh:
             json.dump(results, fh, indent=2, default=float)

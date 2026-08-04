@@ -15,8 +15,9 @@ autolabel-to-world transform on the critical path of every step.
 One row per (clip_id, task, frame). Tasks emitted:
 
   det_objects    01  every road user ahead: class, range, azimuth, motion
-  track_identity 02  the same objects keyed by track id, with how long each has
-                     been visible -- identity persistence, not re-detection
+  track_step     02  tracking as it is normally posed: the detections at
+                     t-4..t-1 go in, the objects at t come out, and an object
+                     must keep the id it already has
   plan_ego       03-1 future ego waypoints as (x, y) offsets in the current ego
                      frame, forward-positive
   agent_traj     03-2 one agent's future range/azimuth over the next 3 s
@@ -47,11 +48,36 @@ import numpy as np
 import pandas as pd
 
 from . import paths
-from .geometry import (doppler_residual, extrinsics_to_matrix, interpolate_pose,
-                       points_in_box, rig_to_world, sensor_to_rig,
-                       spherical_to_sensor_xyz)
+from .geometry import (doppler_residual, extrinsics_to_matrix, image_bbox,
+                       interpolate_pose, points_in_box, rig_to_world,
+                       sensor_to_rig, spherical_to_sensor_xyz)
 
 ANCHOR_FRAMES = (6, 11, 16)      # 1-indexed; t = frame - 1 seconds
+N_CLIP_FRAMES = 20               # the 1 Hz grid the model is shown
+
+# `det_objects` alone is not a prediction: it asks what is ahead at one instant,
+# so it is not bound by the 3 s horizon that fixes the shared anchors, and it
+# takes a single video frame plus the radar scans just before that instant
+# rather than the whole clip. Six evenly spaced instants therefore cost the same
+# context as one of the old three did and double the items per clip.
+DET_ANCHOR_S = (3, 6, 9, 12, 15, 18)
+
+# Task 02 is about identity across time, so it keeps the whole clip as input and
+# emits one answer per clip rather than one per instant.
+CAMERA = "camera_front_wide_120fov"
+TRACK_MIN_FRAMES = 2      # a single 1 Hz sighting is label noise, not a track
+MAX_TRACKS = 10           # median clip has 38 tracks lasting >= 2 frames
+BBOX_SCALE = 1000         # normalised, so the answer does not encode a resolution
+
+# Task 02.2: tracking as it is normally posed -- see t-n..t-1, then name the
+# objects at t. The window is five seconds; the answer is the last instant.
+STEP_WINDOW_S = 5
+# Every second, not every third. In a rollout the history is the model's
+# own previous outputs, so the gap between anchors *is* the gap between
+# history entries; anchors 3 s apart with a 1 s history would train one
+# prompt shape and evaluate another.
+STEP_ANCHOR_S = tuple(range(STEP_WINDOW_S, 20))
+STEP_HISTORY = 4          # how many past 1 Hz frames of detections are shown
 HORIZON_S = (1.0, 2.0, 3.0)      # prediction offsets for 03-1, 03-2, 04
 BOX_TIME_WINDOW_S = 0.15         # a 10 Hz label stream, so this catches 1-2 obs
 DOPPLER_THRESHOLD_MS = 1.0
@@ -62,7 +88,8 @@ MAX_LISTED = 8                   # objects per answer, nearest first
 # Answers that cite radar evidence, and so may only be emitted for a clip that
 # actually carries a front radar.
 RADAR_EVIDENCE_TASKS = ("depth_range", "motion_seg", "motion_seg_cot",
-                        "agent_traj_cot")
+                        "agent_traj_cot", "det_objects_azdeg_cot",
+                        "det_objects_3dbbox_cot", "depth_range_cot")
 
 SENSOR_NAME = {"srr0": "radar_front_center_srr_0",
                "mrr2": "radar_front_center_mrr_2",
@@ -224,6 +251,27 @@ def ego_waypoints(derived, t_s):
 # serialisation
 # --------------------------------------------------------------------------
 
+def describe_object_xyz(row, hits=None, with_motion=True):
+    """The same object in rig coordinates: x forward, y left, z up.
+
+    The polar form loses precision with distance -- one degree of azimuth is
+    0.6 m at 34 m and 1.7 m at 100 m -- and the matcher converts back to
+    Cartesian to score anyway, so this format skips a conversion rather than
+    adding one. `z` is included because height separates a vehicle on an
+    overpass from one on the road beneath it, which range and bearing alone
+    cannot.
+    """
+    text = (f"{row.label_class} ({row.center_x:.1f}, {row.center_y:.1f}, "
+            f"{row.center_z:.1f})")
+    if with_motion:
+        text += " moving" if row.moved else " stationary"
+    if hits is not None:
+        n = hits.get(row.track_id, (0, 0, 0.0))[0]
+        text += (f" ({n} radar return{'s' if n > 1 else ''})" if n
+                 else " (no radar return)")
+    return text
+
+
 def describe_object(row, hits=None, with_motion=True):
     """One object as text. `with_motion` is off where the grouping already says
     it -- task 06 lists under a moving/stationary heading, so repeating the word
@@ -300,6 +348,63 @@ def clip_items(clip_id, row, nvidia_root):
                       "prompt": prompt, "target": target,
                       "needs_radar": task in RADAR_EVIDENCE_TASKS})
 
+    # 01 runs on its own instants. It asks what is ahead now, not what happens
+    # next, so the 3 s horizon that pins the shared anchors does not apply, and
+    # its single-frame input means six instants cost less context than one of
+    # the shared anchors did.
+    for seconds in DET_ANCHOR_S:
+        t_s = float(seconds)
+        if t_s > derived["t"].max():
+            break
+        here = visible_at(boxes, t_s)
+        listed = None if here is None or here.empty else here.head(MAX_LISTED)
+        scan = (radar_scan(radar, extrinsics, SENSOR_NAME[short], t_s, ego, derived)
+                if radar is not None and extrinsics is not None else None)
+        hits = radar_hits(scan, here if here is None or here.empty else here.head(24))
+        frame = seconds + 1                      # 1-indexed, t = frame - 1
+        question = ("List every road user in the forward sector with its class, "
+                    "range and azimuth.")
+        if listed is None:
+            answer = "No road users in the forward sector."
+        else:
+            answer = "; ".join(describe_object(r) for r in listed.itertuples())
+        emit("det_objects_azdeg", frame, question, answer)
+
+        question_xyz = ("List every road user in the forward sector with its "
+                        "class and 3D position as (x, y, z) in metres, x "
+                        "forward, y left, z up.")
+        if listed is None:
+            answer_xyz = "No road users in the forward sector."
+        else:
+            answer_xyz = "; ".join(describe_object_xyz(r)
+                                   for r in listed.itertuples())
+        emit("det_objects_3dbbox", frame, question_xyz, answer_xyz)
+
+        # The radar cannot see every object -- 85.7% of heavy trucks carry a
+        # return and 20.2% of people do -- so the evidence says which of the
+        # listed objects the sensor supports and which are the camera's word
+        # alone, and how many of each object's returns survive the ego's own
+        # motion, which is what the answer's moving/stationary rests on.
+        if has_radar and listed is not None:
+            lit = [f"{r.label_class} at {r.range_m:.0f} m: "
+                   f"{hits[r.track_id][0]} radar returns, "
+                   f"{hits[r.track_id][1]} of them moving once the ego's own "
+                   f"motion is removed"
+                   for r in listed.itertuples() if hits.get(r.track_id)]
+            dark = [f"{r.label_class} at {r.range_m:.0f} m"
+                    for r in listed.itertuples() if not hits.get(r.track_id)]
+            parts = []
+            if lit:
+                parts.append("radar-confirmed: " + "; ".join(lit))
+            if dark:
+                parts.append("camera only: " + "; ".join(dark))
+            if parts:
+                rationale = ". ".join(parts) + "."
+                emit("det_objects_azdeg_cot", frame, question,
+                     json.dumps({"rationale": rationale, "answer": answer}))
+                emit("det_objects_3dbbox_cot", frame, question_xyz,
+                     json.dumps({"rationale": rationale, "answer": answer_xyz}))
+
     for frame in ANCHOR_FRAMES:
         t_s = float(frame - 1)
         if t_s > derived["t"].max():
@@ -310,27 +415,6 @@ def clip_items(clip_id, row, nvidia_root):
         hits = radar_hits(scan, here if here is None or here.empty else here.head(24))
 
         listed = None if here is None or here.empty else here.head(MAX_LISTED)
-
-        # 01 -- detection as an enumeration with geometry attached.
-        if listed is None:
-            answer = "No road users in the forward sector."
-        else:
-            answer = "; ".join(describe_object(r) for r in listed.itertuples())
-        emit("det_objects", frame,
-             "List every road user in the forward sector with its class, range "
-             "and azimuth.", answer)
-
-        # 02 -- identity: the same objects, keyed and aged.
-        if listed is None:
-            answer = "No tracks in the forward sector."
-        else:
-            answer = "; ".join(
-                f"#{int(r.track_id)} {r.label_class} {r.range_m:.0f} m "
-                f"visible {max(0.0, t_s - r.first_seen_s):.1f} s"
-                for r in listed.itertuples())
-        emit("track_identity", frame,
-             "Give the track id, class, range and age of every object you are "
-             "tracking ahead.", answer)
 
         # 05 -- depth, paired with what the radar can confirm.
         if has_radar:
@@ -347,9 +431,24 @@ def clip_items(clip_id, row, nvidia_root):
                     radar_part = "no object ahead carries a radar return"
                 answer = (f"nearest {nearest.label_class} at "
                           f"{nearest.range_m:.0f} m; {radar_part}")
-            emit("depth_range", frame,
-                 "How far is the nearest object ahead, and the nearest one the "
-                 "radar confirms?", answer)
+            question = ("How far is the nearest object ahead, and the nearest "
+                        "one the radar confirms?")
+            emit("depth_range", frame, question, answer)
+
+            # The whole point of this task is the pairing: the camera ranges the
+            # nearest thing, the radar confirms a possibly different one. Stating
+            # the returns is what separates the two claims.
+            if listed is not None:
+                evidence = [f"{r.label_class} at {r.range_m:.0f} m: "
+                            f"{hits[r.track_id][0]} returns"
+                            for r in listed.itertuples() if hits.get(r.track_id)]
+                # With no radar-confirmed object the rationale can only restate
+                # the answer's second clause, which teaches the model to pad
+                # rather than to reason. Those frames keep the plain task.
+                if evidence:
+                    emit("depth_range_cot", frame, question, json.dumps({
+                        "rationale": "; ".join(evidence) + ".",
+                        "answer": answer}))
 
         # 06 -- moving vs stationary, with the radar evidence spelled out.
         if has_radar:
@@ -371,16 +470,25 @@ def clip_items(clip_id, row, nvidia_root):
             # so this is the weaker of the two chains -- but it is still a chain,
             # and the stated velocities are checkable against the scan.
             if listed is not None:
+                # Cite the ego-compensated count, not the raw radial velocity.
+                # The stated rule is about the residual left after the ego's own
+                # motion is removed, but the raw radial of a *stationary* object
+                # is just the ego's speed projected onto it -- so a chain that
+                # quoted -5.1 m/s and concluded "stationary" contradicted its own
+                # rule, and a model following the reasoning would answer wrongly.
+                # `n_moving` is the number of returns whose residual clears the
+                # threshold, which is exactly what the verdict rests on.
                 evidence = [
                     f"{r.label_class} at {r.range_m:.0f} m: "
-                    f"{hits[r.track_id][0]} returns, mean radial "
-                    f"{hits[r.track_id][2]:+.1f} m/s"
+                    f"{hits[r.track_id][0]} returns, {hits[r.track_id][1]} of "
+                    f"them still moving once the ego's own motion is removed"
                     for r in listed.itertuples() if hits.get(r.track_id)]
                 if evidence:
                     emit("motion_seg_cot", frame, question, json.dumps({
-                        "rationale": "; ".join(evidence) + ". A residual above "
-                                     "1 m/s after removing the ego's own motion "
-                                     "means the object is moving.",
+                        "rationale": "; ".join(evidence) + ". An object whose "
+                                     "returns keep a residual above 1 m/s is "
+                                     "moving; one whose returns are explained "
+                                     "entirely by the ego's own motion is not.",
                         "answer": answer}))
 
         # 03-1 -- ego waypoints.
@@ -388,17 +496,57 @@ def clip_items(clip_id, row, nvidia_root):
         if waypoints is not None:
             answer = "; ".join(f"+{h:.0f}s ({x:+.1f}, {y:+.1f})"
                                for h, (x, y) in zip(HORIZON_S, waypoints))
-            emit("plan_ego", frame,
-                 "Predict the ego vehicle's path over the next 3 seconds as "
-                 "(x, y) offsets in metres.", answer)
+            question = ("Predict the ego vehicle's path over the next 3 seconds "
+                        "as (x, y) offsets in metres.")
+            emit("plan_ego", frame, question, answer)
+
+            # No radar here: where the ego goes is a function of how fast it is
+            # going and how hard it is turning, both measured by the egomotion
+            # stream. Speed times horizon is the forward offset to first order,
+            # so the rationale is genuinely upstream of the answer.
+            i = at_time(derived, t_s)
+            speed = float(np.hypot(derived["velocity"][i, 0],
+                                   derived["velocity"][i, 1]))
+            emit("plan_ego_cot", frame, question, json.dumps({
+                "rationale": (f"The ego vehicle is travelling at {speed:.1f} m/s "
+                              f"and will {ego_action(derived, t_s)}. At that "
+                              f"speed it covers about {speed:.0f} m per "
+                              f"second."),
+                "answer": answer}))
 
         # 04 -- the scene 3 s on, given the action the ego takes.
         future = visible_at(boxes, t_s + HORIZON_S[-1])
         if waypoints is not None and future is not None:
-            emit("world_model", frame,
-                 f"The ego vehicle will {ego_action(derived, t_s)} over the next "
-                 f"3 seconds. What will the forward scene look like then?",
-                 scene_summary(future.head(MAX_LISTED)))
+            question = (f"The ego vehicle will {ego_action(derived, t_s)} over "
+                        f"the next 3 seconds. What will the forward scene look "
+                        f"like then?")
+            answer = scene_summary(future.head(MAX_LISTED))
+            emit("world_model", frame, question, answer)
+
+            # What the scene becomes is the present scene carried forward by the
+            # ego's own motion and the objects' -- so the present is upstream of
+            # the answer in the way a rationale needs. Radial velocity is cited
+            # where the radar measured it, since that is the one term that says
+            # whether a gap closes or opens.
+            if listed is not None:
+                # Azimuth belongs here. Range change alone cannot explain the
+                # answer's object *count*: an object at 61 m and +47 deg does
+                # not end up at 18 m, it leaves the +/-60 deg sector as the ego
+                # draws level with it. Without the bearing the chain explains
+                # the distances and contradicts the count.
+                now = [(f"{r.label_class} at {r.range_m:.0f} m, "
+                        f"az {r.azimuth_deg:+.0f} deg" +
+                        (f", radial {hits[r.track_id][2]:+.1f} m/s"
+                         if hits.get(r.track_id) else ""))
+                       for r in listed.itertuples()]
+                emit("world_model_cot", frame, question, json.dumps({
+                    "rationale": (f"Now: {'; '.join(now)}. The ego covers about "
+                                  f"{float(np.hypot(*derived['velocity'][at_time(derived, t_s), :2])) * 3:.0f} m "
+                                  f"in 3 s, so ranges change by that much plus "
+                                  f"each object's own motion, and anything the "
+                                  f"ego draws level with leaves the forward "
+                                  f"sector."),
+                    "answer": answer}))
 
         # 03-2 -- one agent, forward in time. The nearest mover is the agent
         # worth predicting; a parked car's answer is its current position.
@@ -446,7 +594,184 @@ def clip_items(clip_id, row, nvidia_root):
                                 f"median radial velocity {radial:+.1f} m/s, so it "
                                 f"is {closing}."),
                             "answer": "; ".join(path)}))
+    # 02 -- tracking, posed as tracking: a history goes in, one instant comes
+    # out. The ids the answer must use are fixed by the history block in the
+    # prompt, not by the label, so the same check works when the history is the
+    # model's own output at evaluation time as when it is the truth in training.
+    ids = local_ids(boxes)
+    camera = camera_model(clip_id, row, nvidia_root)
+    ASKED = {"azdeg": "with its class, range and azimuth",
+             "bbox": "with its class and image bounding box [x1, y1, x2, y2] "
+                     "normalised to 0-1000"}
+    for seconds in STEP_ANCHOR_S:
+        if float(seconds) > derived["t"].max():
+            break
+        past = [(back, step_frame(boxes, float(seconds - back), ids, camera))
+                for back in range(STEP_HISTORY, 0, -1) if seconds - back >= 0]
+        now = step_frame(boxes, float(seconds), ids, camera)
+        if not past:
+            continue
+        for form, asked in ASKED.items():
+            if form == "bbox" and not any(o["bbox"] for o in now):
+                continue
+            history = "\n".join(f"t-{back}s: {step_text(objects, form)}"
+                                for back, objects in past)
+            emit(f"track_step_{form}", seconds + 1,
+                 "Previous detections:\n" + history + "\n"
+                 f"Continue tracking: list the road users at this instant "
+                 f"{asked}, reusing the id each object already has and giving a "
+                 f"new id to anything not seen before.",
+                 step_text(now, form))
+
     return items
+
+
+def camera_model(clip_id, row, nvidia_root):
+    """(rotation, translation, intrinsics) for the front wide camera, or None.
+
+    The lens is f-theta, not pinhole, so the intrinsics are a polynomial rather
+    than a matrix; `geometry.ftheta_project` consumes this dict directly.
+    """
+    if not isinstance(row.get("camera_intrinsics_parquet"), str):
+        return None
+    if not isinstance(row.get("radar_extrinsics_parquet"), str):
+        return None
+    try:
+        intr = pd.read_parquet(os.path.join(nvidia_root,
+                                            row["camera_intrinsics_parquet"]))
+        ext = pd.read_parquet(os.path.join(nvidia_root,
+                                           row["radar_extrinsics_parquet"]))
+        if (clip_id, CAMERA) not in intr.index or (clip_id, CAMERA) not in ext.index:
+            return None
+        model = json.loads(intr.loc[(clip_id, CAMERA), "model_parameters"])
+        rot, translation = extrinsics_to_matrix(ext.loc[(clip_id, CAMERA)])
+    except Exception:
+        return None
+    return rot, translation, model
+
+
+def track_records(boxes, radar, extrinsics, short, ego, derived, camera):
+    """One record per track: where it is, whether the radar sees it, how long.
+
+    Tracks are kept whatever the radar does, with `radar_confirmed` saying which
+    the sensor supports. Dropping the unconfirmed ones would have removed 58% of
+    forward tracks and 80% of pedestrians -- measured -- turning "track what is
+    ahead" into "track vehicles", and teaching the model that people are not
+    there to be tracked. The flag keeps both: it cannot be answered from the
+    camera, because which object carries a return is a fact about the radar.
+    """
+    seen, confirmed = {}, set()
+    for frame in range(1, N_CLIP_FRAMES + 1):
+        t_s = float(frame - 1)
+        here = visible_at(boxes, t_s)
+        if here is None or here.empty:
+            continue
+        scan = (radar_scan(radar, extrinsics, SENSOR_NAME[short], t_s, ego, derived)
+                if radar is not None and extrinsics is not None else None)
+        hits = radar_hits(scan, here.head(24)) if scan is not None else {}
+        # `radar_hits` keys off the raw track_id, which the obstacle archive
+        # stores as a string; the records key off int(track_id). Comparing the
+        # two silently never matched, so every track read radar_confirmed=false.
+        confirmed |= {int(k) for k in hits}
+        for r in here.itertuples():
+            record = seen.setdefault(int(r.track_id),
+                                     {"first": frame, "count": 0})
+            record.update(last=frame, row=r)
+            record["count"] += 1
+
+    out = []
+    for tid, rec in seen.items():
+        if rec["count"] < TRACK_MIN_FRAMES:
+            continue
+        r = rec["row"]
+        bbox = None
+        if camera is not None:
+            rot, translation, model = camera
+            box = image_bbox([r.center_x, r.center_y, r.center_z],
+                             [r.size_x, r.size_y, r.size_z],
+                             [r.orientation_x, r.orientation_y,
+                              r.orientation_z, r.orientation_w],
+                             rot, translation, model)
+            if box:
+                width, height = model["resolution"]
+                bbox = [round(box[0] / width * BBOX_SCALE),
+                        round(box[1] / height * BBOX_SCALE),
+                        round(box[2] / width * BBOX_SCALE),
+                        round(box[3] / height * BBOX_SCALE)]
+        out.append({"track_id": tid, "class": r.label_class, "bbox": bbox,
+                    "range_m": round(float(r.range_m)),
+                    "azimuth_deg": round(float(r.azimuth_deg)),
+                    "motion": "moving" if r.moved else "stationary",
+                    "radar_confirmed": tid in confirmed,
+                    "first_observed_frame": rec["first"],
+                    "last_observed_frame": rec["last"]})
+    # Nearest first at the last sighting, matching every other task's ordering.
+    return sorted(out, key=lambda e: e["range_m"])[:MAX_TRACKS]
+
+
+def local_ids(boxes):
+    """Track ids renumbered 1, 2, 3... in order of first appearance in the clip.
+
+    The archive's ids are arbitrary integers in the hundreds. What the task is
+    about is whether an object keeps the *same* number over time, not what that
+    number is, so small ordinals make the answer shorter and the question
+    honest: a model that calls the first car #1 and the label calls it #68 is
+    not wrong, and renumbering removes the temptation to score it as if it were.
+    """
+    order = boxes.sort_values("t_s").drop_duplicates("track_id")["track_id"]
+    return {tid: i + 1 for i, tid in enumerate(order)}
+
+
+def step_frame(boxes, t_s, ids, camera=None, limit=MAX_LISTED):
+    """The objects at one instant, with both representations attached.
+
+    Two output formats exist for the same instant -- range/azimuth and an image
+    box -- so the geometry is computed once and each format reads what it needs.
+    """
+    here = visible_at(boxes, t_s)
+    if here is None or here.empty:
+        return []
+    out = []
+    for r in here.head(limit).itertuples():
+        if r.track_id not in ids:
+            continue
+        bbox = None
+        if camera is not None:
+            rot, translation, model = camera
+            box = image_bbox([r.center_x, r.center_y, r.center_z],
+                             [r.size_x, r.size_y, r.size_z],
+                             [r.orientation_x, r.orientation_y,
+                              r.orientation_z, r.orientation_w],
+                             rot, translation, model)
+            if box:
+                width, height = model["resolution"]
+                bbox = [round(box[0] / width * BBOX_SCALE),
+                        round(box[1] / height * BBOX_SCALE),
+                        round(box[2] / width * BBOX_SCALE),
+                        round(box[3] / height * BBOX_SCALE)]
+        out.append({"id": ids[r.track_id], "cls": r.label_class,
+                    "rng": float(r.range_m), "az": float(r.azimuth_deg),
+                    "moved": bool(r.moved), "bbox": bbox})
+    return out
+
+
+def step_text(objects, form="azdeg"):
+    """One instant as text, in whichever representation the instruction asked
+    for. The history block uses the same form as the answer, so the ids the
+    model has to carry forward are written the way it must write them back."""
+    if form == "bbox":
+        objects = [o for o in objects if o["bbox"]]
+    if not objects:
+        return "none"
+    if form == "bbox":
+        return "; ".join(
+            f"#{o['id']} {o['cls']} [{o['bbox'][0]}, {o['bbox'][1]}, "
+            f"{o['bbox'][2]}, {o['bbox'][3]}] "
+            f"{'moving' if o['moved'] else 'stationary'}" for o in objects)
+    return "; ".join(f"#{o['id']} {o['cls']} {o['rng']:.0f} m "
+                     f"az {o['az']:+.0f} deg "
+                     f"{'moving' if o['moved'] else 'stationary'}"
+                     for o in objects)
 
 
 def process(args_tuple):

@@ -165,8 +165,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--checkpoint")
     ap.add_argument("--model", default="8B")
-    ap.add_argument("--task", default="det_objects",
-                    choices=("det_objects", "track_identity"))
+    ap.add_argument("--task", default="det_objects_azdeg",
+                    choices=("det_objects_azdeg", "det_objects_3dbbox",
+                             "track_step_azdeg", "track_step_bbox"))
     ap.add_argument("--split", default="val")
     ap.add_argument("--items", type=int, default=300)
     ap.add_argument("--workers", type=int, default=4)
