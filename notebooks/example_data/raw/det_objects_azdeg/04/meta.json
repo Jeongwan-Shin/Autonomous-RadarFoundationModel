@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_azdeg/04",
+ "task": "det_objects_azdeg",
+ "clip_id": "2773ae21-0dfc-4f88-8693-7b055092e5b6",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, at t=9s): t0:s8a12y15",
+ "instruction": "At frame 10. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "person 5 m az -31 deg; automobile 49 m az +3 deg; automobile 61 m az -4 deg",
+ "rationale": "person: camera az -47 deg, no radar return; automobile: camera az +3 deg, radar 6 returns at 49 m az +3 deg; automobile: camera az -4 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"person: camera az -47 deg, no radar return; automobile: camera az +3 deg, radar 6 returns at 49 m az +3 deg; automobile: camera az -4 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"person 5 m az -31 deg; automobile 49 m az +3 deg; automobile 61 m az -4 deg\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 2956,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_azdeg/04"
+}

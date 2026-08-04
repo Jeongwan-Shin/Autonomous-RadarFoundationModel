@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/02",
+ "task": "agent_traj_azdeg",
+ "clip_id": "ee34f77a-8c6b-4a1a-8c8c-0b70e66d174b",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=3s): t0:s3a15y15 t1:s3a16y15 t2:s3a16y15 t3:s3a16y15 t4:s3a17y15 t5:s3a17y15 t6:s3a16y15 t7:s3a16y15 t8:s3a17y16 t9:s3a16y16 t10:s3a17y15 t11:s3a18y16 t12:s3a17y16 t13:s3a16y15 t14:s3a17y15 t15:s3a17y16 t16:s3a16y15 t17:s3a15y15 t18:s3a17y15 t19:s3a18y15",
+ "instruction": "At frame 4. Track #2 is a automobile at 1 m, azimuth +1 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s 1 m az +1 deg; +2s 1 m az +2 deg; +3s 1 m az +2 deg",
+ "rationale": "#2 automobile is at 1 m az +1 deg now, camera az +1 deg, radar 2 returns at 4 m, radial +3.6 m/s, so it is receding: radial velocity times time is the change in range.",
+ "cot_target": "{\"rationale\": \"#2 automobile is at 1 m az +1 deg now, camera az +1 deg, radar 2 returns at 4 m, radial +3.6 m/s, so it is receding: radial velocity times time is the change in range.\", \"answer\": \"+1s 1 m az +1 deg; +2s 1 m az +2 deg; +3s 1 m az +2 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 2559,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/02"
+}

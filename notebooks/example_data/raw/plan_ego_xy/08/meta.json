@@ -1,0 +1,21 @@
+{
+ "id": "plan_ego_xy/08",
+ "task": "plan_ego_xy",
+ "clip_id": "52748d01-720d-4873-8c3a-b52afa9d0d96",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=15s): t0:s7a10y15 t1:s6a11y15 t2:s6a10y14 t3:s6a10y14 t4:s6a11y15 t5:s6a11y15 t6:s6a11y15 t7:s6a10y16 t8:s6a10y16 t9:s5a9y16 t10:s5a10y17 t11:s5a10y17 t12:s5a9y18 t13:s5a10y19 t14:s5a10y20 t15:s4a10y21 t16:s4a9y22 t17:s4a8y24 t18:s4a10y26 t19:s4a9y27",
+ "instruction": "At frame 16. Predict the ego vehicle's path over the next 3 seconds as (x, y) offsets in metres.",
+ "target": "+1s (+3.7, +0.8); +2s (+5.6, +3.4); +3s (+5.0, +7.0)",
+ "rationale": "The ego vehicle is travelling at 4.4 m/s and will hold speed and turn left. At that speed it covers about 4 m per second.",
+ "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 4.4 m/s and will hold speed and turn left. At that speed it covers about 4 m per second.\", \"answer\": \"+1s (+3.7, +0.8); +2s (+5.6, +3.4); +3s (+5.0, +7.0)\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 3923,
+ "radar_scans": 20,
+ "raw": "raw/plan_ego_xy/08"
+}

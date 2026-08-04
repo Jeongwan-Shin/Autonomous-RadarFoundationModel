@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/04",
+ "task": "agent_traj_azdeg",
+ "clip_id": "7fa9a91b-2e15-40b4-99c8-ccec5d3a9757",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=9s): t0:s9a16y16 t1:s9a16y16 t2:s9a17y16 t3:s9a17y16 t4:s9a15y16 t5:s9a15y16 t6:s9a17y16 t7:s9a16y16 t8:s9a15y16 t9:s9a15y16 t10:s9a16y16 t11:s9a16y16 t12:s9a16y16 t13:s9a16y16 t14:s9a15y17 t15:s9a16y17 t16:s9a16y17 t17:s9a16y17 t18:s9a17y17 t19:s9a16y17",
+ "instruction": "At frame 10. Track #107 is a person at 9 m, azimuth -17 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s leaves the forward sector",
+ "rationale": "#107 person is at 9 m az -17 deg now, camera az -21 deg, no radar return, so its speed is not measured, and it leaves the forward sector inside the horizon.",
+ "cot_target": "{\"rationale\": \"#107 person is at 9 m az -17 deg now, camera az -21 deg, no radar return, so its speed is not measured, and it leaves the forward sector inside the horizon.\", \"answer\": \"+1s leaves the forward sector\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 8334,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/04"
+}

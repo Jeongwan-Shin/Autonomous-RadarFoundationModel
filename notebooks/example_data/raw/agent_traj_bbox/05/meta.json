@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_bbox/05",
+ "task": "agent_traj_bbox",
+ "clip_id": "048700db-5074-473c-8edb-1a9cd9f1475d",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=13s): t0:s9a15y14 t1:s9a18y15 t2:s9a18y15 t3:s9a16y15 t4:s9a16y14 t5:s9a17y14 t6:s9a16y13 t7:s9a17y13 t8:s10a18y13 t9:s10a18y13 t10:s10a17y13 t11:s10a17y13 t12:s10a17y13 t13:s10a17y13 t14:s10a18y13 t15:s10a18y13 t16:s10a17y13 t17:s10a17y13 t18:s10a17y13 t19:s10a17y13",
+ "instruction": "At frame 14. Track #54 is a person at 91 m, azimuth -13 deg. Where will it be over the next 3 seconds? Answer as an image bounding box [x1, y1, x2, y2] normalised to 0-1000, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s [577, 683, 582, 701]; +2s [532, 678, 538, 698]; +3s [491, 686, 498, 709]",
+ "rationale": "#54 person is at 91 m az -13 deg now, camera az -13 deg, no radar return, so its speed is not measured.",
+ "cot_target": "{\"rationale\": \"#54 person is at 91 m az -13 deg now, camera az -13 deg, no radar return, so its speed is not measured.\", \"answer\": \"+1s [577, 683, 582, 701]; +2s [532, 678, 538, 698]; +3s [491, 686, 498, 709]\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 10865,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_bbox/05"
+}

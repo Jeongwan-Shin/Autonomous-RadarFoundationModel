@@ -1,0 +1,21 @@
+{
+ "id": "qa/01",
+ "task": "qa",
+ "clip_id": "35be278f-6fbe-40a7-8fbc-fa5565e23916",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t17): t0:s7a16y22 t1:s7a14y22 t2:s7a14y22 t3:s6a14y22 t4:s5a11y24 t5:s5a14y25 t6:s4a17y22 t7:s5a18y20 t8:s6a16y19 t9:s5a15y20 t10:s6a16y22 t11:s6a16y23 t12:s6a15y21 t13:s6a16y20 t14:s5a10y17 t15:s4a9y11 t16:s3a14y5 t17:s2a14y2",
+ "instruction": "At frame 18, what is the optimal speed for ego over the next few seconds?\nA. Significantly faster.\nB. Slightly faster.\nC. Current speed.\nD. Slightly slower.\nE. Significantly slower.\nReason step by step, then answer with the letter.",
+ "target": "B",
+ "rationale": "At frame 18, the ego's current speed is 2.76 m/s, which is quite low. The predicted future speed trend is increasing (as determined in Q10), and the curvature is becoming less negative, indicating the ego is straightening out from a right turn. Given that the ego is exiting a turn and the path ahead is clearing, a slightly faster speed would be optimal. This allows for efficient progress without compromising safety, as the vehicle gains stability on a straighter path. Maintaining current speed would be suboptimal for flow, while significantly faster or slower speeds could introduce unnecessary risks or inefficiencies.",
+ "cot_target": "{\"rationale\": \"At frame 18, the ego's current speed is 2.76 m/s, which is quite low. The predicted future speed trend is increasing (as determined in Q10), and the curvature is becoming less negative, indicating the ego is straightening out from a right turn. Given that the ego is exiting a turn and the path ahead is clearing, a slightly faster speed would be optimal. This allows for efficient progress without compromising safety, as the vehicle gains stability on a straighter path. Maintaining current speed would be suboptimal for flow, while significantly faster or slower speeds could introduce unnecessary risks or inefficiencies.\", \"answer\": \"B\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 5850,
+ "radar_scans": 20,
+ "raw": "raw/qa/01"
+}

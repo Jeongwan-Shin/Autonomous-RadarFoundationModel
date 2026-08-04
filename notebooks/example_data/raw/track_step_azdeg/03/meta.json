@@ -1,0 +1,21 @@
+{
+ "id": "track_step_azdeg/03",
+ "task": "track_step_azdeg",
+ "clip_id": "a0b303e0-c837-4659-95cf-e6f2f9f72bd2",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=9s): t0:s21a16y15 t1:s21a16y15 t2:s22a17y15 t3:s22a17y15 t4:s22a15y15 t5:s22a17y15 t6:s22a16y15 t7:s22a17y16 t8:s22a18y16 t9:s22a15y16 t10:s22a17y15 t11:s22a16y16 t12:s22a17y15 t13:s22a16y16 t14:s22a13y16 t15:s22a15y16 t16:s22a15y16 t17:s22a13y16 t18:s22a16y16 t19:s22a12y15",
+ "instruction": "At frame 10. Previous detections:\nt-4s: none\nt-3s: none\nt-2s: none\nt-1s: none\nContinue tracking: list the road users at this instant with its class, range and azimuth, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "none",
+ "rationale": ". Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \". Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"none\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 15525,
+ "radar_scans": 20,
+ "raw": "raw/track_step_azdeg/03"
+}

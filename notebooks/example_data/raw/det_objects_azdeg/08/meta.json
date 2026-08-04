@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_azdeg/08",
+ "task": "det_objects_azdeg",
+ "clip_id": "68a629f4-9e82-4ee4-a806-c8c0200b0b22",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, at t=6s): t0:s6a8y16",
+ "instruction": "At frame 7. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "automobile 5 m az +44 deg; automobile 7 m az -31 deg; automobile 16 m az -13 deg; automobile 19 m az +4 deg; automobile 28 m az +58 deg; automobile 37 m az -7 deg; automobile 40 m az -29 deg; automobile 43 m az -7 deg",
+ "rationale": "automobile: camera az +40 deg, radar 1 return at 7 m az +26 deg; automobile: camera az -39 deg, radar 12 returns at 9 m az -22 deg; automobile: camera az -16 deg, radar 13 returns at 15 m az -15 deg; automobile: camera az +5 deg, radar 16 returns at 18 m az +4 deg; automobile: camera az +59 deg, no radar return; automobile: camera az -8 deg, radar 2 returns at 36 m az -7 deg; automobile: camera az -30 deg, no radar return; automobile: camera az -7 deg, radar 1 return at 42 m az -5 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"automobile: camera az +40 deg, radar 1 return at 7 m az +26 deg; automobile: camera az -39 deg, radar 12 returns at 9 m az -22 deg; automobile: camera az -16 deg, radar 13 returns at 15 m az -15 deg; automobile: camera az +5 deg, radar 16 returns at 18 m az +4 deg; automobile: camera az +59 deg, no radar return; automobile: camera az -8 deg, radar 2 returns at 36 m az -7 deg; automobile: camera az -30 deg, no radar return; automobile: camera az -7 deg, radar 1 return at 42 m az -5 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile 5 m az +44 deg; automobile 7 m az -31 deg; automobile 16 m az -13 deg; automobile 19 m az +4 deg; automobile 28 m az +58 deg; automobile 37 m az -7 deg; automobile 40 m az -29 deg; automobile 43 m az -7 deg\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 15510,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_azdeg/08"
+}

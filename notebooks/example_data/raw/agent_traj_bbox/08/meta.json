@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_bbox/08",
+ "task": "agent_traj_bbox",
+ "clip_id": "f6e327d9-b371-4843-939f-1023edd080cf",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=7s): t0:s8a14y16 t1:s8a14y16 t2:s8a16y16 t3:s8a14y16 t4:s8a14y16 t5:s8a15y16 t6:s8a16y15 t7:s8a16y15 t8:s8a13y15 t9:s8a14y15 t10:s8a14y15 t11:s8a14y15 t12:s8a13y15 t13:s8a13y15 t14:s8a16y15 t15:s8a14y15 t16:s8a14y15 t17:s8a14y15 t18:s8a14y15 t19:s8a14y15",
+ "instruction": "At frame 8. Track #84 is a automobile at 26 m, azimuth -42 deg. Where will it be over the next 3 seconds? Answer as an image bounding box [x1, y1, x2, y2] normalised to 0-1000, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s [962, 520, 999, 616]; +2s leaves the forward sector",
+ "rationale": "#84 automobile is at 26 m az -42 deg now, camera az -44 deg, no radar return, so its speed is not measured, and it leaves the forward sector inside the horizon.",
+ "cot_target": "{\"rationale\": \"#84 automobile is at 26 m az -42 deg now, camera az -44 deg, no radar return, so its speed is not measured, and it leaves the forward sector inside the horizon.\", \"answer\": \"+1s [962, 520, 999, 616]; +2s leaves the forward sector\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 4446,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_bbox/08"
+}

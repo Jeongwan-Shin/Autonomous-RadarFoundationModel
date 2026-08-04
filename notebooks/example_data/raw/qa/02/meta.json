@@ -1,0 +1,21 @@
+{
+ "id": "qa/02",
+ "task": "qa",
+ "clip_id": "4b17e196-40dc-4a22-ac78-c334efa4ee51",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t7): t0:s14a15y17 t1:s14a16y17 t2:s14a15y16 t3:s14a18y16 t4:s14a15y16 t5:s14a12y15 t6:s14a15y15 t7:s14a15y15",
+ "instruction": "Based on ego's predicted trajectory, what will be its approximate yaw at t=3s from Frame 8?\nA. Approximately 0.05 radians.\nB. Approximately -0.01 radians.\nC. Approximately 0.10 radians.\nD. Approximately -0.05 radians.\nE. Approximately 0.01 radians.\nReason step by step, then answer with the letter.",
+ "target": "E",
+ "rationale": "At Frame 8, the ego vehicle's predicted future kinematics state that at t=3s, its yaw will be 0.009 radians. This value is best approximated by 'Approximately 0.01 radians'.",
+ "cot_target": "{\"rationale\": \"At Frame 8, the ego vehicle's predicted future kinematics state that at t=3s, its yaw will be 0.009 radians. This value is best approximated by 'Approximately 0.01 radians'.\", \"answer\": \"E\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 17086,
+ "radar_scans": 20,
+ "raw": "raw/qa/02"
+}

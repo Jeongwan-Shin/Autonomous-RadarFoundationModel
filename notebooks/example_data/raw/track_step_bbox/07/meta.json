@@ -1,0 +1,21 @@
+{
+ "id": "track_step_bbox/07",
+ "task": "track_step_bbox",
+ "clip_id": "9f1e057f-303d-446e-b9f4-7047fe238281",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=9s): t0:s7a15y16 t1:s7a15y16 t2:s7a14y16 t3:s7a14y16 t4:s7a15y16 t5:s7a14y15 t6:s7a15y15 t7:s6a15y15 t8:s7a18y15 t9:s7a16y14 t10:s7a17y14 t11:s7a16y14 t12:s7a15y14 t13:s7a15y14 t14:s7a14y14 t15:s7a13y14 t16:s6a10y14 t17:s6a8y15 t18:s5a8y15 t19:s5a8y16",
+ "instruction": "At frame 10. Previous detections:\nt-4s: #12 automobile [823, 570, 999, 778]; #11 automobile [337, 706, 413, 798]; #13 automobile [537, 677, 609, 773]; #10 automobile [181, 737, 261, 805]; #42 automobile [272, 729, 329, 782]; #15 automobile [614, 688, 674, 727]; #45 automobile [305, 728, 346, 754]; #38 automobile [342, 721, 363, 747]\nt-3s: #11 automobile [226, 711, 370, 872]; #13 automobile [560, 653, 687, 816]; #10 automobile [70, 754, 184, 851]; #42 automobile [203, 741, 285, 812]; #15 automobile [643, 682, 716, 731]; #45 automobile [280, 738, 327, 768]; #38 automobile [323, 731, 347, 759]; #35 automobile [350, 729, 373, 755]\nt-2s: #11 automobile [0, 677, 212, 999]; #13 automobile [599, 535, 937, 999]; #10 automobile [0, 764, 20, 912]; #42 automobile [67, 746, 186, 848]; #15 automobile [669, 670, 761, 732]; #45 automobile [228, 738, 281, 772]; #38 automobile [280, 731, 308, 764]; #35 automobile [312, 728, 339, 758]\nt-1s: #42 automobile [0, 753, 38, 903]; #15 automobile [708, 655, 828, 740]; #45 automobile [157, 738, 217, 779]; #35 automobile [255, 727, 289, 762]; #38 automobile [219, 730, 253, 768]; #44 automobile [688, 662, 725, 698]; #51 automobile [21, 760, 54, 790]; #52 automobile [3, 764, 37, 792]\nContinue tracking: list the road users at this instant with its class and image bounding box [x1, y1, x2, y2] normalised to 0-1000, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "#15 automobile [798, 627, 946, 751]; #45 automobile [91, 732, 157, 780]; #35 automobile [204, 719, 247, 761]; #38 automobile [164, 722, 206, 766]; #44 automobile [703, 649, 748, 690]; #51 automobile [0, 756, 2, 788]",
+ "rationale": "#15 automobile: was at 20 m az -30 deg, camera az -45 deg, radar 8 returns at 14 m az -38 deg; #45 automobile: was at 39 m az +34 deg, camera az +43 deg, no radar return; #35 automobile: was at 43 m az +24 deg, camera az +31 deg, radar 1 return at 37 m az +29 deg; #38 automobile: was at 44 m az +28 deg, camera az +36 deg, radar 1 return at 38 m az +34 deg; #44 automobile: was at 49 m az -25 deg, camera az -28 deg, radar 2 returns at 42 m az -27 deg; #51 automobile: was at 59 m az +52 deg, camera az +58 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"#15 automobile: was at 20 m az -30 deg, camera az -45 deg, radar 8 returns at 14 m az -38 deg; #45 automobile: was at 39 m az +34 deg, camera az +43 deg, no radar return; #35 automobile: was at 43 m az +24 deg, camera az +31 deg, radar 1 return at 37 m az +29 deg; #38 automobile: was at 44 m az +28 deg, camera az +36 deg, radar 1 return at 38 m az +34 deg; #44 automobile: was at 49 m az -25 deg, camera az -28 deg, radar 2 returns at 42 m az -27 deg; #51 automobile: was at 59 m az +52 deg, camera az +58 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"#15 automobile [798, 627, 946, 751]; #45 automobile [91, 732, 157, 780]; #35 automobile [204, 719, 247, 761]; #38 automobile [164, 722, 206, 766]; #44 automobile [703, 649, 748, 690]; #51 automobile [0, 756, 2, 788]\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 12762,
+ "radar_scans": 20,
+ "raw": "raw/track_step_bbox/07"
+}

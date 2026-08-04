@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_azdeg/02",
+ "task": "det_objects_azdeg",
+ "clip_id": "328e9419-fc5b-44e1-96d0-cbdc30ca50a4",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, at t=6s): t0:s1a15y16",
+ "instruction": "At frame 7. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "person 19 m az +42 deg; automobile 24 m az +11 deg; person 25 m az +38 deg; automobile 26 m az -38 deg; automobile 28 m az -8 deg; automobile 29 m az +47 deg; automobile 31 m az -47 deg; automobile 31 m az -6 deg",
+ "rationale": "person: camera az +46 deg, radar 1 return at 19 m az +43 deg; automobile: camera az +12 deg, radar 12 returns at 23 m az +10 deg; person: camera az +41 deg, no radar return; automobile: camera az -40 deg, no radar return; automobile: camera az -9 deg, radar 3 returns at 27 m az -5 deg; automobile: camera az +50 deg, no radar return; automobile: camera az -49 deg, no radar return; automobile: camera az -7 deg, radar 2 returns at 31 m az -3 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"person: camera az +46 deg, radar 1 return at 19 m az +43 deg; automobile: camera az +12 deg, radar 12 returns at 23 m az +10 deg; person: camera az +41 deg, no radar return; automobile: camera az -40 deg, no radar return; automobile: camera az -9 deg, radar 3 returns at 27 m az -5 deg; automobile: camera az +50 deg, no radar return; automobile: camera az -49 deg, no radar return; automobile: camera az -7 deg, radar 2 returns at 31 m az -3 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"person 19 m az +42 deg; automobile 24 m az +11 deg; person 25 m az +38 deg; automobile 26 m az -38 deg; automobile 28 m az -8 deg; automobile 29 m az +47 deg; automobile 31 m az -47 deg; automobile 31 m az -6 deg\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 3079,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_azdeg/02"
+}

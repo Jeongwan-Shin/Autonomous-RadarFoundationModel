@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_bbox/04",
+ "task": "agent_traj_bbox",
+ "clip_id": "03c75a29-6a6f-4ce0-be2b-447ed5122379",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=11s): t0:s26a15y15 t1:s26a17y15 t2:s27a19y15 t3:s27a19y15 t4:s27a17y15 t5:s27a14y14 t6:s27a14y14 t7:s27a14y14 t8:s27a14y14 t9:s27a13y14 t10:s26a18y14 t11:s26a18y14 t12:s27a21y14 t13:s27a16y14 t14:s27a16y14 t15:s27a14y15 t16:s27a15y15 t17:s27a15y15 t18:s27a12y15 t19:s27a11y15",
+ "instruction": "At frame 12. Track #2 is a automobile at 23 m, azimuth +6 deg. Where will it be over the next 3 seconds? Answer as an image bounding box [x1, y1, x2, y2] normalised to 0-1000, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s [422, 486, 485, 565]; +2s [446, 482, 507, 563]; +3s [463, 481, 522, 564]",
+ "rationale": "#2 automobile is at 23 m az +6 deg now, camera az +7 deg, radar 5 returns at 21 m, radial +0.4 m/s, so it is holding its range: radial velocity times time is the change in range.",
+ "cot_target": "{\"rationale\": \"#2 automobile is at 23 m az +6 deg now, camera az +7 deg, radar 5 returns at 21 m, radial +0.4 m/s, so it is holding its range: radial velocity times time is the change in range.\", \"answer\": \"+1s [422, 486, 485, 565]; +2s [446, 482, 507, 563]; +3s [463, 481, 522, 564]\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 3802,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_bbox/04"
+}

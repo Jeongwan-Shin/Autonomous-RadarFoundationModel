@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_3dbbox/06",
+ "task": "det_objects_3dbbox",
+ "clip_id": "f1cfc5cc-3155-4215-b582-bb06e805b804",
+ "sensors": "Sensors present: camera, ego motion, no radar.",
+ "ego": "Ego motion (binned, at t=12s): t0:s3a15y7",
+ "instruction": "At frame 13. List every road user in the forward sector with its class and 3D position as (x, y, z) in metres, x forward, y left, z up.",
+ "target": "automobile (4.1, 3.7, 0.8); automobile (10.0, 4.0, 0.7); automobile (14.8, 4.6, 0.8); automobile (16.4, 1.4, 0.9); automobile (25.4, 0.4, 0.9); automobile (28.5, -4.5, 0.9); automobile (35.4, 0.6, 1.0); automobile (38.6, 5.1, 1.0)",
+ "rationale": "automobile: camera az +43 deg, no radar return; automobile: camera az +29 deg, no radar return; automobile: camera az +21 deg, no radar return; automobile: camera az +6 deg, no radar return; automobile: camera az +1 deg, no radar return; automobile: camera az -9 deg, no radar return; automobile: camera az +1 deg, no radar return; automobile: camera az +8 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"automobile: camera az +43 deg, no radar return; automobile: camera az +29 deg, no radar return; automobile: camera az +21 deg, no radar return; automobile: camera az +6 deg, no radar return; automobile: camera az +1 deg, no radar return; automobile: camera az -9 deg, no radar return; automobile: camera az +1 deg, no radar return; automobile: camera az +8 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile (4.1, 3.7, 0.8); automobile (10.0, 4.0, 0.7); automobile (14.8, 4.6, 0.8); automobile (16.4, 1.4, 0.9); automobile (25.4, 0.4, 0.9); automobile (28.5, -4.5, 0.9); automobile (35.4, 0.6, 1.0); automobile (38.6, 5.1, 1.0)\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 0,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_3dbbox/06"
+}

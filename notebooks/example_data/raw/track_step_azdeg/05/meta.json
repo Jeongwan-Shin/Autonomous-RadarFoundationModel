@@ -1,0 +1,21 @@
+{
+ "id": "track_step_azdeg/05",
+ "task": "track_step_azdeg",
+ "clip_id": "9f35e571-02c0-4201-90b1-c16aa8f4f9a3",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=9s): t0:s0a16y15 t1:s0a15y16 t2:s0a16y16 t3:s0a15y15 t4:s0a15y16 t5:s0a16y15 t6:s0a16y15 t7:s0a15y16 t8:s0a15y15 t9:s0a16y16 t10:s0a15y15 t11:s0a16y15 t12:s0a15y16 t13:s0a16y16 t14:s0a15y16 t15:s0a16y15 t16:s0a15y15 t17:s0a16y16 t18:s0a15y16 t19:s0a16y16",
+ "instruction": "At frame 10. Previous detections:\nt-4s: #1 automobile 5 m az -39 deg; #9 automobile 9 m az -54 deg; #6 automobile 21 m az -30 deg; #26 automobile 45 m az +3 deg; #27 automobile 46 m az +9 deg; #30 automobile 52 m az +2 deg; #25 automobile 53 m az +7 deg; #28 automobile 59 m az -0 deg\nt-3s: #1 automobile 5 m az -39 deg; #9 automobile 11 m az -40 deg; #41 automobile 23 m az +31 deg; #6 automobile 28 m az -36 deg; #26 automobile 45 m az +3 deg; #27 automobile 46 m az +9 deg; #30 automobile 52 m az +2 deg; #25 automobile 53 m az +7 deg\nt-2s: #1 automobile 5 m az -39 deg; #9 automobile 14 m az -32 deg; #41 automobile 27 m az -18 deg; #6 automobile 35 m az -43 deg; #26 automobile 45 m az +3 deg; #27 automobile 46 m az +9 deg; #30 automobile 52 m az +2 deg; #25 automobile 53 m az +7 deg\nt-1s: #1 automobile 5 m az -39 deg; #9 automobile 17 m az -29 deg; #41 automobile 44 m az -42 deg; #6 automobile 44 m az -49 deg; #26 automobile 45 m az +3 deg; #27 automobile 46 m az +9 deg; #30 automobile 52 m az +2 deg; #25 automobile 53 m az +7 deg\nContinue tracking: list the road users at this instant with its class, range and azimuth, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "#1 automobile 5 m az -39 deg; #9 automobile 21 m az -30 deg; #26 automobile 45 m az +3 deg; #27 automobile 46 m az +9 deg; #30 automobile 52 m az +2 deg; #25 automobile 53 m az +7 deg; #6 automobile 55 m az -53 deg; #28 automobile 59 m az -0 deg",
+ "rationale": "#1 automobile: was at 5 m az -39 deg, camera az -35 deg, radar 2 returns at 7 m az -28 deg; #9 automobile: was at 17 m az -29 deg, camera az -32 deg, 100% occluded, radar 4 returns at 21 m az -31 deg; #26 automobile: was at 45 m az +3 deg, camera az +3 deg, radar 1 return at 43 m az +4 deg; #27 automobile: was at 46 m az +9 deg, camera az +9 deg, radar 1 return at 44 m az +9 deg; #30 automobile: was at 52 m az +2 deg, camera az +3 deg, 56% occluded, radar 1 return at 51 m az +1 deg; #25 automobile: was at 53 m az +7 deg, camera az +7 deg, radar 2 returns at 53 m az +7 deg; #6 automobile: was at 44 m az -49 deg, camera az -55 deg, no radar return; #28 automobile: newly seen, camera az -0 deg, radar 3 returns at 59 m az -0 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"#1 automobile: was at 5 m az -39 deg, camera az -35 deg, radar 2 returns at 7 m az -28 deg; #9 automobile: was at 17 m az -29 deg, camera az -32 deg, 100% occluded, radar 4 returns at 21 m az -31 deg; #26 automobile: was at 45 m az +3 deg, camera az +3 deg, radar 1 return at 43 m az +4 deg; #27 automobile: was at 46 m az +9 deg, camera az +9 deg, radar 1 return at 44 m az +9 deg; #30 automobile: was at 52 m az +2 deg, camera az +3 deg, 56% occluded, radar 1 return at 51 m az +1 deg; #25 automobile: was at 53 m az +7 deg, camera az +7 deg, radar 2 returns at 53 m az +7 deg; #6 automobile: was at 44 m az -49 deg, camera az -55 deg, no radar return; #28 automobile: newly seen, camera az -0 deg, radar 3 returns at 59 m az -0 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"#1 automobile 5 m az -39 deg; #9 automobile 21 m az -30 deg; #26 automobile 45 m az +3 deg; #27 automobile 46 m az +9 deg; #30 automobile 52 m az +2 deg; #25 automobile 53 m az +7 deg; #6 automobile 55 m az -53 deg; #28 automobile 59 m az -0 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 2711,
+ "radar_scans": 20,
+ "raw": "raw/track_step_azdeg/05"
+}

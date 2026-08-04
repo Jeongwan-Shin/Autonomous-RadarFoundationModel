@@ -1,0 +1,21 @@
+{
+ "id": "motion_seg_azdeg/06",
+ "task": "motion_seg_azdeg",
+ "clip_id": "ad2948d2-4bbe-4c3d-8b0f-97b99fa973f7",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=14s): t0:s8a23y18 t1:s8a22y17 t2:s8a23y17 t3:s8a22y17 t4:s8a22y17 t5:s9a24y17 t6:s9a22y17 t7:s9a22y17 t8:s9a21y17 t9:s9a22y17 t10:s9a23y17 t11:s10a22y16 t12:s10a24y16 t13:s10a22y16 t14:s10a22y16 t15:s10a23y16 t16:s10a21y16 t17:s11a21y16 t18:s11a21y17 t19:s11a22y17",
+ "instruction": "At frame 15. Which objects ahead are moving and which are stationary? Use the radar Doppler and the camera. Identify each as range in metres and azimuth in degrees.",
+ "target": "moving: automobile 70 m az +17 deg, automobile 82 m az +13 deg, automobile 91 m az +11 deg. stationary: automobile 33 m az +45 deg, automobile 38 m az +37 deg.",
+ "rationale": "The ego is travelling at 11.4 m/s, yaw +1.6 deg/s. automobile at 33 m az +45 deg: no radar return; automobile at 38 m az +37 deg: no radar return, camera expects az +37 deg if stationary, sees +37 (residual 0.1 deg); automobile at 70 m az +17 deg: radar expects -10.9 m/s if stationary, measures -7.3 (residual 3.6); automobile at 82 m az +13 deg: no radar return, camera expects az +15 deg if stationary, sees +13 (residual 1.4 deg); automobile at 91 m az +11 deg: no radar return, camera expects az +12 deg if stationary, sees +11 (residual 0.9 deg). A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.",
+ "cot_target": "{\"rationale\": \"The ego is travelling at 11.4 m/s, yaw +1.6 deg/s. automobile at 33 m az +45 deg: no radar return; automobile at 38 m az +37 deg: no radar return, camera expects az +37 deg if stationary, sees +37 (residual 0.1 deg); automobile at 70 m az +17 deg: radar expects -10.9 m/s if stationary, measures -7.3 (residual 3.6); automobile at 82 m az +13 deg: no radar return, camera expects az +15 deg if stationary, sees +13 (residual 1.4 deg); automobile at 91 m az +11 deg: no radar return, camera expects az +12 deg if stationary, sees +11 (residual 0.9 deg). A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.\", \"answer\": \"moving: automobile 70 m az +17 deg, automobile 82 m az +13 deg, automobile 91 m az +11 deg. stationary: automobile 33 m az +45 deg, automobile 38 m az +37 deg.\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 3260,
+ "radar_scans": 20,
+ "raw": "raw/motion_seg_azdeg/06"
+}

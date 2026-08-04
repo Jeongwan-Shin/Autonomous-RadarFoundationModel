@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_3dbbox/07",
+ "task": "det_objects_3dbbox",
+ "clip_id": "67e05a2f-66dd-4749-b9d8-f89ccc95808d",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, at t=18s): t0:s0a17y16",
+ "instruction": "At frame 19. List every road user in the forward sector with its class and 3D position as (x, y, z) in metres, x forward, y left, z up.",
+ "target": "automobile (5.7, -5.9, 0.7); rider (16.3, -5.5, 0.9); rider (16.6, -6.8, 0.9); rider (19.3, -23.4, 0.4); rider (25.2, -18.1, 0.7); person (16.3, -27.3, 0.1); person (16.8, -27.5, 0.1); rider (27.6, -16.7, 0.7)",
+ "rationale": "automobile: camera az -52 deg, radar 2 returns at 9 m az -37 deg; rider: camera az -21 deg, radar 3 returns at 17 m az -19 deg; rider: camera az -25 deg, radar 5 returns at 18 m az -21 deg; rider: camera az -54 deg, no radar return; rider: camera az -38 deg, radar 3 returns at 31 m az -36 deg; rider: camera az -33 deg, radar 1 return at 32 m az -32 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"automobile: camera az -52 deg, radar 2 returns at 9 m az -37 deg; rider: camera az -21 deg, radar 3 returns at 17 m az -19 deg; rider: camera az -25 deg, radar 5 returns at 18 m az -21 deg; rider: camera az -54 deg, no radar return; rider: camera az -38 deg, radar 3 returns at 31 m az -36 deg; rider: camera az -33 deg, radar 1 return at 32 m az -32 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile (5.7, -5.9, 0.7); rider (16.3, -5.5, 0.9); rider (16.6, -6.8, 0.9); rider (19.3, -23.4, 0.4); rider (25.2, -18.1, 0.7); person (16.3, -27.3, 0.1); person (16.8, -27.5, 0.1); rider (27.6, -16.7, 0.7)\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 7893,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_3dbbox/07"
+}

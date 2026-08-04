@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/08",
+ "task": "agent_traj_azdeg",
+ "clip_id": "cce4b7b9-67e6-4564-a0c1-1c3699102cff",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=11s): t0:s1a18y15 t1:s1a18y15 t2:s1a20y15 t3:s1a20y16 t4:s1a19y16 t5:s1a19y15 t6:s2a19y16 t7:s2a19y16 t8:s2a19y16 t9:s2a19y16 t10:s2a19y16 t11:s2a20y16 t12:s2a19y16 t13:s2a19y16 t14:s2a20y17 t15:s2a20y17 t16:s2a20y17 t17:s3a20y18 t18:s3a20y18 t19:s3a20y19",
+ "instruction": "At frame 12. Track #26 is a automobile at 8 m, azimuth +29 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s leaves the forward sector",
+ "rationale": "#26 automobile is at 8 m az +29 deg now, camera az +38 deg, radar 8 returns at 9 m, radial -7.3 m/s, so it is closing: radial velocity times time is the change in range, and it leaves the forward sector inside the horizon.",
+ "cot_target": "{\"rationale\": \"#26 automobile is at 8 m az +29 deg now, camera az +38 deg, radar 8 returns at 9 m, radial -7.3 m/s, so it is closing: radial velocity times time is the change in range, and it leaves the forward sector inside the horizon.\", \"answer\": \"+1s leaves the forward sector\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 4165,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/08"
+}

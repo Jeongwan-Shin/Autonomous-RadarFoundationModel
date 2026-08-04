@@ -1,7 +1,15 @@
 # Code only. Everything a run produces is reproducible from it and is large.
 runs/
-*.pdf
 *.log
+
+# The four reports are the readable record of why the data looks the way it
+# does, and a reader without the 3.7 GB parquet cannot regenerate them. They
+# are a few hundred kB each, so they live in the tree.
+*.pdf
+!RaViLa_report_v1_prepare.pdf
+!RaViLa_report_v2_training.pdf
+!RaVL-Autobench.pdf
+!RaVL_dataset_v2.pdf
 
 # Data and model artefacts never belong in the tree -- paths.py points at them.
 *.parquet

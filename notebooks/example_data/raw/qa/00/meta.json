@@ -1,0 +1,21 @@
+{
+ "id": "qa/00",
+ "task": "qa",
+ "clip_id": "2735a61c-71af-4431-a23b-46e7dcab394a",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t12): t0:s9a24y16 t1:s12a24y16 t2:s12a16y15 t3:s12a16y16 t4:s12a13y18 t5:s12a16y19 t6:s12a17y16 t7:s12a16y15 t8:s12a13y15 t9:s11a12y16 t10:s10a10y16 t11:s9a10y15 t12:s7a6y16",
+ "instruction": "At frame 13, how far is the ego from the stop line?\nA. About ten meters ahead\nB. About fifteen meters ahead\nC. About twenty meters ahead\nD. About seven meters ahead\nE. About twenty-five meters ahead\nReason step by step, then answer with the letter.",
+ "target": "D",
+ "rationale": "At Frame 13, the ego vehicle's position is pos=(137.54, 14.67, 1.95). The stop line is clearly visible in the image. By observing the ego future trajectory overlay in Frame 14, the ego's current position (t=0s) is (144.11, 15.74), and its front bumper is roughly at the stop line. This suggests the stop line is approximately at x=145 in the world frame. Therefore, at Frame 13, the distance from the ego's current x-position (137.54) to the stop line (approx. 145) is 145 - 137.54 = 7.46 meters. Considering the ego's length (L=5.39m), its front bumper is about 7.46 - (5.39/2) = 4.76m from the stop line. The closest option to this distance is 'About seven meters ahead'.",
+ "cot_target": "{\"rationale\": \"At Frame 13, the ego vehicle's position is pos=(137.54, 14.67, 1.95). The stop line is clearly visible in the image. By observing the ego future trajectory overlay in Frame 14, the ego's current position (t=0s) is (144.11, 15.74), and its front bumper is roughly at the stop line. This suggests the stop line is approximately at x=145 in the world frame. Therefore, at Frame 13, the distance from the ego's current x-position (137.54) to the stop line (approx. 145) is 145 - 137.54 = 7.46 meters. Considering the ego's length (L=5.39m), its front bumper is about 7.46 - (5.39/2) = 4.76m from the stop line. The closest option to this distance is 'About seven meters ahead'.\", \"answer\": \"D\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 17705,
+ "radar_scans": 20,
+ "raw": "raw/qa/00"
+}

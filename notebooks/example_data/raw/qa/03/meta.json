@@ -1,0 +1,21 @@
+{
+ "id": "qa/03",
+ "task": "qa",
+ "clip_id": "41d00e94-5ba6-4be3-a6aa-3601c7330b43",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t13): t0:s4a14y16 t1:s4a15y15 t2:s5a16y16 t3:s6a21y16 t4:s7a20y16 t5:s7a18y15 t6:s8a16y15 t7:s9a17y16 t8:s10a18y16 t9:s11a21y16 t10:s12a19y16 t11:s12a19y16 t12:s13a19y16 t13:s14a18y16",
+ "instruction": "Should the ego attempt to overtake the dark heavy truck directly ahead at Frame 14?\nA. Yes, it is safe.\nB. No, due to oncoming traffic.\nC. No, due to road conditions.\nD. Yes, if accelerating faster.\nE. Yes, if truck slows.\nReason step by step, then answer with the letter.",
+ "target": "C",
+ "rationale": "At Frame 14, the ego-vehicle is in a construction zone, indicated by the barriers on the left. This limits lateral maneuverability and creates a confined driving environment. Additionally, there are large oncoming vehicles (the white heavy truck with 'NUSS' on its side and the white trailer behind it) in the adjacent lane. Attempting to overtake in these road conditions, which include limited space and opposing traffic, would be unsafe. Therefore, the ego should not attempt to overtake due to the prevailing road conditions.",
+ "cot_target": "{\"rationale\": \"At Frame 14, the ego-vehicle is in a construction zone, indicated by the barriers on the left. This limits lateral maneuverability and creates a confined driving environment. Additionally, there are large oncoming vehicles (the white heavy truck with 'NUSS' on its side and the white trailer behind it) in the adjacent lane. Attempting to overtake in these road conditions, which include limited space and opposing traffic, would be unsafe. Therefore, the ego should not attempt to overtake due to the prevailing road conditions.\", \"answer\": \"C\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 11200,
+ "radar_scans": 20,
+ "raw": "raw/qa/03"
+}

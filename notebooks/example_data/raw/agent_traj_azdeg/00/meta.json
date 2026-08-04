@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/00",
+ "task": "agent_traj_azdeg",
+ "clip_id": "21177c72-3b3f-4f71-ba37-ee91ce0695dd",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=17s): t0:s1a13y16 t1:s1a14y15 t2:s1a14y15 t3:s1a14y16 t4:s1a13y16 t5:s1a13y15 t6:s1a14y15 t7:s1a13y16 t8:s1a13y16 t9:s1a13y16 t10:s1a12y16 t11:s1a12y15 t12:s1a12y15 t13:s1a12y16 t14:s1a11y16 t15:s0a12y16 t16:s0a12y15 t17:s0a13y16 t18:s0a13y16 t19:s0a13y15",
+ "instruction": "At frame 18. Track #577 is a bus at 8 m, azimuth -25 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s 7 m az -26 deg; +2s 7 m az -27 deg; +3s 7 m az -27 deg",
+ "rationale": "#577 bus is at 8 m az -25 deg now, camera az -17 deg, radar 16 returns at 9 m, radial -0.6 m/s, so it is closing: radial velocity times time is the change in range.",
+ "cot_target": "{\"rationale\": \"#577 bus is at 8 m az -25 deg now, camera az -17 deg, radar 16 returns at 9 m, radial -0.6 m/s, so it is closing: radial velocity times time is the change in range.\", \"answer\": \"+1s 7 m az -26 deg; +2s 7 m az -27 deg; +3s 7 m az -27 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 6089,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/00"
+}

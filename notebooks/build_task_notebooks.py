@@ -298,7 +298,90 @@ for v in VARIANTS:
             print(f"{name:26s} 클립 전체 — 비전 20장 · 레이더 20스캔/20초")
 """)
 
-    md("## 4. 실제 아이템\n\n빌드된 파일에서 그대로 꺼냅니다.")
+    # Everything below this point needs the 3.7 GB parquet and the raw archives.
+    # This section needs neither: `notebooks/example_data` carries ten real
+    # items per task with the frames and returns that produced them, so the
+    # notebook opens on a machine that has only the repository.
+    md("## 4. 예제 10건 — 원시 입력째로\n\n"
+       "`notebooks/example_data/` 에 테스크마다 10건이 들어 있습니다. "
+       "**parquet 도 원본 아카이브도 필요 없습니다.**\n\n"
+       "| 경로 | 내용 |\n|---|---|\n"
+       "| `gen_data/<task>.jsonl` | LLM 학습에 쓰이는 아이템 그대로 — "
+       "instruction, ego, 정답, 근거 |\n"
+       "| `raw/<task>/NN/frames/` | 그 아이템에 실제로 들어가는 프레임 |\n"
+       "| `raw/<task>/NN/radar.npz` | 그 창의 레이더 반사점 (패딩 제거) |\n\n"
+       "평문 변형과 CoT 변형은 같은 아이템입니다 — CoT 정답의 `answer` 필드가 "
+       "평문 정답과 글자 그대로 같아서, 한 건이 둘을 모두 보여줍니다.")
+    code("""
+import glob
+EX = os.path.abspath(os.path.join(os.getcwd(), "..", "example_data"))
+examples = {}
+for v in VARIANTS:
+    path = os.path.join(EX, "gen_data", v + ".jsonl")
+    examples[v] = [json.loads(l) for l in open(path)] if os.path.exists(path) else []
+    print(f"{v:26s} {len(examples[v]):>2}건")
+rows = [{"id": r["id"], "clip": r["clip_id"][:8], "프레임": r["n_frames"],
+         "레이더 점": r["radar_points"], "정답 길이": len(r["target"]),
+         "근거 길이": len(r["rationale"])}
+        for v in VARIANTS for r in examples[v]]
+pd.DataFrame(rows)
+""")
+
+    md("한 건을 통째로 봅니다. instruction 이 출력 형식을 고르고, 근거가 그 "
+       "형식의 답으로 이어집니다.")
+    code("""
+pool = examples[VARIANTS[0]]
+# 리그에 전방 레이더가 없는 클립이 17,130개 있고 예제에도 섞인다. 아래 그림이
+# 보여줄 것이 있도록 반사점이 있는 건을 고르되, 없으면 그대로 쓰고 밝힌다.
+r = next((x for x in pool if x["radar_points"]), pool[0])
+if not r["radar_points"]:
+    print("!! 이 예제는 전방 레이더가 없는 클립입니다 (반사점 0개)")
+print("=" * 96)
+print(f"{r['id']}   clip {r['clip_id'][:8]}   {r['sensors']}")
+print(f"창: {r['window']}")
+print()
+print("instruction:"); print(wrap(r["instruction"].replace(chr(10), " | ")))
+print("ego:");         print(wrap(r["ego"]))
+print("answer (GT):"); print(wrap(r["target"]))
+print("rationale:");   print(wrap(r["rationale"]))
+""")
+
+    md("그 아이템에 실제로 들어가는 프레임과 레이더 반사점입니다. 레이더는 "
+       "자차 기준 좌표(x 전방, y 좌)이고 색이 시선속도 — 정지 물체는 자차 속도의 "
+       "음수로 모여 보입니다.")
+    code("""
+import matplotlib.pyplot as plt
+from PIL import Image
+
+d = os.path.join(EX, r["raw"])
+paths = sorted(glob.glob(os.path.join(d, "frames", "*.jpg")))
+z = np.load(os.path.join(d, "radar.npz"))
+pts, ch = z["points"].astype(np.float32), [str(c) for c in z["channels"]]
+print(f"프레임 {len(paths)}장 · 반사점 {len(pts)}개 · 채널 {ch}")
+
+fig, axes = plt.subplots(1, len(paths) + 1, figsize=(3.1 * (len(paths) + 1), 2.6))
+axes = np.atleast_1d(axes)
+for ax, p in zip(axes, paths):
+    ax.imshow(Image.open(p)); ax.set_title(os.path.basename(p), fontsize=8)
+    ax.axis("off")
+ax = axes[-1]
+# 그림 안 글자는 ASCII 로 둔다. matplotlib 의 기본 폰트에 한글 글리프가 없어
+# 라벨이 네모로 나오고, 폰트 등록을 요구하면 노트북이 기계를 가린다.
+if len(pts):
+    s = ax.scatter(pts[:, ch.index("y")], pts[:, ch.index("x")], s=2,
+                   c=pts[:, ch.index("radial_velocity")], cmap="coolwarm")
+    ax.set_title(f"radar: {r['radar_scans']} scans, {len(pts)} pts", fontsize=8)
+    ax.invert_xaxis(); fig.colorbar(s, ax=ax, label="radial m/s")
+else:
+    ax.text(0.5, 0.5, "no returns", ha="center", va="center")
+    ax.set_title("clip has no forward radar", fontsize=8)
+ax.set_xlabel("y left (m)"); ax.set_ylabel("x forward (m)")
+plt.tight_layout(); plt.show()
+""")
+
+    md("## 5. 빌드된 파일의 실제 아이템\n\n"
+       "여기서부터는 parquet 이 있는 기계에서만 돕니다. 위의 예제가 빌드 전체와 "
+       "같은 규칙으로 만들어졌는지 확인하는 절입니다.")
     code("""
 built = pd.read_parquet(ITEMS)
 for v in VARIANTS:
@@ -320,7 +403,7 @@ for it in items:
     print("A:"); print(wrap(it["target"]))
 """)
 
-    md("## 5. CoT — 근거가 답을 만드는가\n\n"
+    md("## 6. CoT — 근거가 답을 만드는가\n\n"
        "`_cot` 변형은 `{\"rationale\": ..., \"answer\": ...}` 입니다. "
        "**근거를 따라가면 답이 나와야** 합니다. 나오지 않으면 그 사슬은 잘못된 "
        "것이고, 보상을 걸면 모델이 그 잘못된 사슬을 배웁니다.")
@@ -343,7 +426,7 @@ print("R:"); print(wrap(d["rationale"]))
 print("A:"); print(wrap(d["answer"]))
 """)
 
-    md("## 6. 보상\n\n평가 채점기에서 유도했습니다. 정답을 그대로 넣으면 1.0 이 "
+    md("## 7. 보상\n\n평가 채점기에서 유도했습니다. 정답을 그대로 넣으면 1.0 이 "
        "나와야 하고, 내용을 망가뜨리면 떨어져야 합니다.")
     code("""
 import re
@@ -382,7 +465,7 @@ for name in ("qa", "qa_cot"):
 pd.DataFrame(rows)
 """)
 
-    md("## 7. 데이터 양\n\n`val` 은 `train` 에 합쳐져 있습니다 — 클립 분할이 "
+    md("## 8. 데이터 양\n\n`val` 은 `train` 에 합쳐져 있습니다 — 클립 분할이 "
        "train 86,607 / val 54,163 / test 37,121 인데, 모델 선택은 `test` 에서 "
        "하므로 검증용 3분의 1이 쓰이지 않고 있었습니다.")
     code("""
@@ -398,7 +481,7 @@ pd.DataFrame(rows).pivot(index="task", columns="split", values="items")
 """)
 
     if spec["notes"]:
-        md("## 8. 이 태스크에서 내린 결정과 근거\n\n" +
+        md("## 9. 이 태스크에서 내린 결정과 근거\n\n" +
            "\n\n".join(f"**{a}**\n\n{b}" for a, b in spec["notes"]))
 
     nb = {"cells": CELLS,

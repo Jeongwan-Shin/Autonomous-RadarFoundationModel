@@ -1,0 +1,21 @@
+{
+ "id": "motion_seg_bbox/07",
+ "task": "motion_seg_bbox",
+ "clip_id": "285a25f8-e4b8-472c-bd7c-8c02d31167a3",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=10s): t0:s2a10y15 t1:s2a10y15 t2:s2a10y15 t3:s2a10y15 t4:s2a10y15 t5:s1a10y15 t6:s1a11y15 t7:s1a11y15 t8:s1a10y16 t9:s1a11y15 t10:s1a12y15 t11:s1a12y16 t12:s1a13y15 t13:s1a13y15 t14:s1a12y16 t15:s0a14y16 t16:s0a13y15 t17:s0a12y15 t18:s0a13y16 t19:s0a14y16",
+ "instruction": "At frame 11. Which objects ahead are moving and which are stationary? Use the radar Doppler and the camera. Identify each as an image bounding box [x1, y1, x2, y2] normalised to 0-1000.",
+ "target": "moving: rider [165, 695, 219, 793], rider [0, 705, 3, 798], automobile [209, 723, 264, 767], automobile [303, 728, 331, 758], rider [795, 700, 803, 725], rider [548, 718, 561, 740]. stationary: person [83, 731, 89, 753], rider [267, 725, 282, 748].",
+ "rationale": "The ego is travelling at 0.7 m/s, yaw +0.0 deg/s. rider at 19 m az +32 deg: radar expects -0.6 m/s if stationary, measures -1.1 (residual 0.4), camera expects az +42 deg if stationary, sees +32 (residual 10.4 deg); rider at 21 m az +57 deg: no radar return; automobile at 36 m az +28 deg: radar expects -0.7 m/s if stationary, measures +1.6 (residual 2.3), camera expects az +37 deg if stationary, sees +28 (residual 8.4 deg); automobile at 51 m az +20 deg: radar expects -0.7 m/s if stationary, measures +5.4 (residual 6.1), camera expects az +19 deg if stationary, sees +20 (residual 0.4 deg); person at 63 m az +47 deg: no radar return, camera expects az +47 deg if stationary, sees +47 (residual 0.0 deg); rider at 68 m az -35 deg: no radar return, camera expects az -34 deg if stationary, sees -35 (residual 1.2 deg); rider at 70 m az -7 deg: radar expects -0.7 m/s if stationary, measures -1.3 (residual 0.5), camera expects az -11 deg if stationary, sees -7 (residual 3.7 deg); rider at 71 m az +25 deg: no radar return, camera expects az +25 deg if stationary, sees +25 (residual 0.0 deg). A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.",
+ "cot_target": "{\"rationale\": \"The ego is travelling at 0.7 m/s, yaw +0.0 deg/s. rider at 19 m az +32 deg: radar expects -0.6 m/s if stationary, measures -1.1 (residual 0.4), camera expects az +42 deg if stationary, sees +32 (residual 10.4 deg); rider at 21 m az +57 deg: no radar return; automobile at 36 m az +28 deg: radar expects -0.7 m/s if stationary, measures +1.6 (residual 2.3), camera expects az +37 deg if stationary, sees +28 (residual 8.4 deg); automobile at 51 m az +20 deg: radar expects -0.7 m/s if stationary, measures +5.4 (residual 6.1), camera expects az +19 deg if stationary, sees +20 (residual 0.4 deg); person at 63 m az +47 deg: no radar return, camera expects az +47 deg if stationary, sees +47 (residual 0.0 deg); rider at 68 m az -35 deg: no radar return, camera expects az -34 deg if stationary, sees -35 (residual 1.2 deg); rider at 70 m az -7 deg: radar expects -0.7 m/s if stationary, measures -1.3 (residual 0.5), camera expects az -11 deg if stationary, sees -7 (residual 3.7 deg); rider at 71 m az +25 deg: no radar return, camera expects az +25 deg if stationary, sees +25 (residual 0.0 deg). A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.\", \"answer\": \"moving: rider [165, 695, 219, 793], rider [0, 705, 3, 798], automobile [209, 723, 264, 767], automobile [303, 728, 331, 758], rider [795, 700, 803, 725], rider [548, 718, 561, 740]. stationary: person [83, 731, 89, 753], rider [267, 725, 282, 748].\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 9641,
+ "radar_scans": 20,
+ "raw": "raw/motion_seg_bbox/07"
+}

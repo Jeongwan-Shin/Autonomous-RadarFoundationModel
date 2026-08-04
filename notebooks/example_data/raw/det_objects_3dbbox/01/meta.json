@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_3dbbox/01",
+ "task": "det_objects_3dbbox",
+ "clip_id": "28d85e7d-d892-4541-b1c3-32dc3dd77b3c",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, at t=9s): t0:s7a13y16",
+ "instruction": "At frame 10. List every road user in the forward sector with its class and 3D position as (x, y, z) in metres, x forward, y left, z up.",
+ "target": "automobile (23.8, 0.1, 1.4); heavy_truck (43.3, 1.4, 2.2)",
+ "rationale": "automobile: camera az +0 deg, radar 11 returns at 23 m az +0 deg; heavy_truck: camera az +2 deg, radar 5 returns at 45 m az +3 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"automobile: camera az +0 deg, radar 11 returns at 23 m az +0 deg; heavy_truck: camera az +2 deg, radar 5 returns at 45 m az +3 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile (23.8, 0.1, 1.4); heavy_truck (43.3, 1.4, 2.2)\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 7533,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_3dbbox/01"
+}

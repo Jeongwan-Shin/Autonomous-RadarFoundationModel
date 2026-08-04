@@ -1,0 +1,21 @@
+{
+ "id": "track_step_azdeg/00",
+ "task": "track_step_azdeg",
+ "clip_id": "a194ada9-e79e-4046-a3ca-00809b75fe43",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=19s): t0:s19a16y15 t1:s19a16y15 t2:s19a15y16 t3:s19a15y15 t4:s19a17y15 t5:s19a17y16 t6:s19a15y16 t7:s19a17y16 t8:s19a15y16 t9:s19a15y16 t10:s19a17y16 t11:s19a15y16 t12:s19a17y16 t13:s19a16y16 t14:s19a18y16 t15:s19a17y16 t16:s19a16y16 t17:s19a16y16 t18:s19a16y16 t19:s19a17y16",
+ "instruction": "At frame 20. Previous detections:\nt-4s: none\nt-3s: none\nt-2s: none\nt-1s: #26 automobile 180 m az +1 deg\nContinue tracking: list the road users at this instant with its class, range and azimuth, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "#26 automobile 134 m az +1 deg",
+ "rationale": "#26 automobile: was at 180 m az +1 deg, camera az +2 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"#26 automobile: was at 180 m az +1 deg, camera az +2 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"#26 automobile 134 m az +1 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 18333,
+ "radar_scans": 20,
+ "raw": "raw/track_step_azdeg/00"
+}

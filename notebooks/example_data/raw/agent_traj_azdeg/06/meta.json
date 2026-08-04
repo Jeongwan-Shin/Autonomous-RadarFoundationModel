@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/06",
+ "task": "agent_traj_azdeg",
+ "clip_id": "067be972-ebd5-4c50-a687-2014d2135d92",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=13s): t0:s8a21y12 t1:s8a21y12 t2:s8a21y12 t3:s8a20y12 t4:s8a19y13 t5:s8a20y13 t6:s8a20y13 t7:s8a20y13 t8:s9a19y13 t9:s9a20y13 t10:s9a20y14 t11:s9a19y14 t12:s9a17y14 t13:s9a17y14 t14:s9a18y15 t15:s9a18y15 t16:s9a18y15 t17:s9a19y16 t18:s9a19y16 t19:s9a18y16",
+ "instruction": "At frame 14. Track #69 is a person at 14 m, azimuth -30 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s leaves the forward sector",
+ "rationale": "#69 person is at 14 m az -30 deg now, camera az -34 deg, radar 4 returns at 14 m, radial -6.5 m/s, so it is closing: radial velocity times time is the change in range, and it leaves the forward sector inside the horizon.",
+ "cot_target": "{\"rationale\": \"#69 person is at 14 m az -30 deg now, camera az -34 deg, radar 4 returns at 14 m, radial -6.5 m/s, so it is closing: radial velocity times time is the change in range, and it leaves the forward sector inside the horizon.\", \"answer\": \"+1s leaves the forward sector\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 4414,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/06"
+}

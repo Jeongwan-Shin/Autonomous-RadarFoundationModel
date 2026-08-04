@@ -1,0 +1,21 @@
+{
+ "id": "motion_seg_azdeg/00",
+ "task": "motion_seg_azdeg",
+ "clip_id": "d02d1d1b-ef06-458c-a64f-3f3ad36526d2",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=12s): t0:s18a15y17 t1:s18a14y17 t2:s18a15y17 t3:s18a15y17 t4:s18a14y17 t5:s18a15y17 t6:s18a15y17 t7:s18a15y17 t8:s18a16y17 t9:s18a15y17 t10:s18a16y17 t11:s18a16y17 t12:s18a15y17 t13:s18a15y17 t14:s18a14y17 t15:s18a14y17 t16:s18a15y17 t17:s18a15y18 t18:s18a15y18 t19:s18a16y18",
+ "instruction": "At frame 13. Which objects ahead are moving and which are stationary? Use the radar Doppler and the camera. Identify each as range in metres and azimuth in degrees.",
+ "target": "moving: none. stationary: heavy_truck 66 m az -25 deg.",
+ "rationale": "The ego is travelling at 18.4 m/s, yaw +3.9 deg/s. heavy_truck at 66 m az -25 deg: radar expects -16.7 m/s if stationary, measures -16.2 (residual 0.5), camera expects az -24 deg if stationary, sees -25 (residual 0.5 deg). A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.",
+ "cot_target": "{\"rationale\": \"The ego is travelling at 18.4 m/s, yaw +3.9 deg/s. heavy_truck at 66 m az -25 deg: radar expects -16.7 m/s if stationary, measures -16.2 (residual 0.5), camera expects az -24 deg if stationary, sees -25 (residual 0.5 deg). A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.\", \"answer\": \"moving: none. stationary: heavy_truck 66 m az -25 deg.\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 15510,
+ "radar_scans": 20,
+ "raw": "raw/motion_seg_azdeg/00"
+}

@@ -1,0 +1,21 @@
+{
+ "id": "qa/05",
+ "task": "qa",
+ "clip_id": "26e30b42-ab15-41b4-89b4-ac37fed3de60",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t18): t0:s19a19y15 t1:s19a15y15 t2:s18a11y15 t3:s18a14y16 t4:s17a15y16 t5:s17a16y15 t6:s17a13y16 t7:s17a16y15 t8:s17a16y15 t9:s17a14y16 t10:s16a12y15 t11:s15a10y15 t12:s14a12y15 t13:s13a12y16 t14:s11a3y16 t15:s8a7y16 t16:s6a9y15 t17:s4a9y15 t18:s3a10y15",
+ "instruction": "At frame 19, what is the predicted future yaw of the ego vehicle at t=3s?\nA. Approximately -0.001 radians.\nB. Approximately -0.002 radians.\nC. Approximately -0.004 radians.\nD. Approximately -0.005 radians.\nE. Approximately -0.003 radians.\nReason step by step, then answer with the letter.",
+ "target": "E",
+ "rationale": "At frame 19, the ego vehicle's predicted future trajectory at t=3s shows its yaw as -0.003 radians. This directly matches option C.",
+ "cot_target": "{\"rationale\": \"At frame 19, the ego vehicle's predicted future trajectory at t=3s shows its yaw as -0.003 radians. This directly matches option C.\", \"answer\": \"E\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 19065,
+ "radar_scans": 20,
+ "raw": "raw/qa/05"
+}

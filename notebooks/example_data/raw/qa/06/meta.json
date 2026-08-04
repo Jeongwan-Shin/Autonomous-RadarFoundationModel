@@ -1,0 +1,21 @@
+{
+ "id": "qa/06",
+ "task": "qa",
+ "clip_id": "349e9a3a-c3c5-4185-9fc6-659f4a61c180",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t19): t0:s0a19y19 t1:s0a17y19 t2:s0a16y19 t3:s0a17y19 t4:s0a16y17 t5:s0a13y16 t6:s0a18y17 t7:s1a19y19 t8:s1a16y24 t9:s2a19y30 t10:s2a18y31 t11:s3a19y29 t12:s4a19y17 t13:s4a19y14 t14:s5a18y16 t15:s6a20y18 t16:s7a18y16 t17:s7a18y16 t18:s8a17y16 t19:s8a16y15",
+ "instruction": "At frame 20, what is the ego vehicle's predicted yaw at t=3s?\nA. Two point one zero six radians.\nB. Two point one two four radians.\nC. Two point zero nine three radians.\nD. Two point zero nine nine radians.\nE. Two point zero eight zero radians.\nReason step by step, then answer with the letter.",
+ "target": "D",
+ "rationale": "According to the Ego Kinematics for Frame 20, the predicted future pose at t=3s includes a yaw of 2.099 radians.",
+ "cot_target": "{\"rationale\": \"According to the Ego Kinematics for Frame 20, the predicted future pose at t=3s includes a yaw of 2.099 radians.\", \"answer\": \"D\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 8443,
+ "radar_scans": 20,
+ "raw": "raw/qa/06"
+}

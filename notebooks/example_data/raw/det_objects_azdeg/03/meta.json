@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_azdeg/03",
+ "task": "det_objects_azdeg",
+ "clip_id": "d2b3ac01-ca2e-4d1a-81ca-1853589454b9",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, at t=9s): t0:s0a15y15",
+ "instruction": "At frame 10. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "automobile 11 m az -37 deg; automobile 18 m az +23 deg; automobile 27 m az +40 deg; automobile 31 m az -37 deg; automobile 36 m az +1 deg; trailer 41 m az +45 deg; automobile 43 m az +11 deg; person 43 m az +15 deg",
+ "rationale": "automobile: camera az -44 deg, radar 4 returns at 12 m az -34 deg; automobile: camera az +26 deg, radar 8 returns at 19 m az +20 deg; automobile: camera az +43 deg, radar 3 returns at 27 m az +40 deg; automobile: camera az -38 deg, radar 5 returns at 29 m az -35 deg; automobile: camera az +1 deg, radar 10 returns at 35 m az -1 deg; trailer: camera az +46 deg, no radar return; automobile: camera az +11 deg, radar 4 returns at 42 m az +10 deg; person: camera az +16 deg, radar 1 return at 43 m az +15 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"automobile: camera az -44 deg, radar 4 returns at 12 m az -34 deg; automobile: camera az +26 deg, radar 8 returns at 19 m az +20 deg; automobile: camera az +43 deg, radar 3 returns at 27 m az +40 deg; automobile: camera az -38 deg, radar 5 returns at 29 m az -35 deg; automobile: camera az +1 deg, radar 10 returns at 35 m az -1 deg; trailer: camera az +46 deg, no radar return; automobile: camera az +11 deg, radar 4 returns at 42 m az +10 deg; person: camera az +16 deg, radar 1 return at 43 m az +15 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile 11 m az -37 deg; automobile 18 m az +23 deg; automobile 27 m az +40 deg; automobile 31 m az -37 deg; automobile 36 m az +1 deg; trailer 41 m az +45 deg; automobile 43 m az +11 deg; person 43 m az +15 deg\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 4043,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_azdeg/03"
+}

@@ -1,0 +1,21 @@
+{
+ "id": "track_step_azdeg/06",
+ "task": "track_step_azdeg",
+ "clip_id": "a1c38788-4ad3-4491-994b-789d83318b90",
+ "sensors": "Sensors present: camera, ego motion, no radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=15s): t0:s5a15y29 t1:s6a18y29 t2:s6a17y25 t3:s7a19y20 t4:s7a17y16 t5:s8a18y16 t6:s8a17y16 t7:s9a17y16 t8:s9a17y15 t9:s10a16y16 t10:s10a17y14 t11:s10a14y15 t12:s10a17y15 t13:s10a17y16 t14:s11a15y16 t15:s11a15y16 t16:s10a14y19 t17:s10a14y18 t18:s10a12y16 t19:s9a13y16",
+ "instruction": "At frame 16. Previous detections:\nt-4s: #86 automobile 13 m az +14 deg; #28 automobile 33 m az -6 deg; #100 person 47 m az -4 deg; #31 automobile 50 m az -0 deg; #88 automobile 54 m az -4 deg; #97 automobile 60 m az -4 deg; #61 person 63 m az -7 deg; #56 automobile 98 m az +1 deg\nt-3s: #28 automobile 23 m az -8 deg; #100 person 36 m az -5 deg; #88 automobile 43 m az -5 deg; #97 automobile 49 m az -4 deg; #31 automobile 52 m az +0 deg; #61 person 54 m az -8 deg; #56 automobile 87 m az +2 deg; #103 person 104 m az +1 deg\nt-2s: #28 automobile 12 m az -15 deg; #100 person 25 m az -6 deg; #88 automobile 32 m az -6 deg; #97 automobile 38 m az -5 deg; #61 person 44 m az -9 deg; #31 automobile 53 m az +3 deg; #56 automobile 76 m az +3 deg; #103 person 91 m az +1 deg\nt-1s: #100 person 14 m az -12 deg; #88 automobile 21 m az -10 deg; #97 automobile 27 m az -7 deg; #61 person 35 m az -12 deg; #115 automobile 52 m az -19 deg; #31 automobile 54 m az +5 deg; #56 automobile 65 m az +3 deg; #103 person 79 m az +1 deg\nContinue tracking: list the road users at this instant with its class, range and azimuth, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "#100 person 4 m az -45 deg; #88 automobile 10 m az -19 deg; #97 automobile 16 m az -12 deg; #61 person 25 m az -16 deg; #118 automobile 37 m az +34 deg; #115 automobile 41 m az -23 deg; #56 automobile 54 m az +4 deg; #31 automobile 54 m az +7 deg",
+ "rationale": "#100 person: was at 14 m az -12 deg, camera az -60 deg, no radar return; #88 automobile: was at 21 m az -10 deg, camera az -24 deg, no radar return; #97 automobile: was at 27 m az -7 deg, camera az -14 deg, no radar return; #61 person: was at 35 m az -12 deg, camera az -17 deg, 100% occluded, no radar return; #118 automobile: newly seen, camera az +35 deg, no radar return; #115 automobile: was at 52 m az -19 deg, camera az -24 deg, 100% occluded, no radar return; #56 automobile: was at 65 m az +3 deg, camera az +4 deg, no radar return; #31 automobile: was at 54 m az +5 deg, camera az +7 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"#100 person: was at 14 m az -12 deg, camera az -60 deg, no radar return; #88 automobile: was at 21 m az -10 deg, camera az -24 deg, no radar return; #97 automobile: was at 27 m az -7 deg, camera az -14 deg, no radar return; #61 person: was at 35 m az -12 deg, camera az -17 deg, 100% occluded, no radar return; #118 automobile: newly seen, camera az +35 deg, no radar return; #115 automobile: was at 52 m az -19 deg, camera az -24 deg, 100% occluded, no radar return; #56 automobile: was at 65 m az +3 deg, camera az +4 deg, no radar return; #31 automobile: was at 54 m az +5 deg, camera az +7 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"#100 person 4 m az -45 deg; #88 automobile 10 m az -19 deg; #97 automobile 16 m az -12 deg; #61 person 25 m az -16 deg; #118 automobile 37 m az +34 deg; #115 automobile 41 m az -23 deg; #56 automobile 54 m az +4 deg; #31 automobile 54 m az +7 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 0,
+ "radar_scans": 20,
+ "raw": "raw/track_step_azdeg/06"
+}

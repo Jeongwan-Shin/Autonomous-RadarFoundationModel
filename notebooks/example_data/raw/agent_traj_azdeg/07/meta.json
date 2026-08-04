@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/07",
+ "task": "agent_traj_azdeg",
+ "clip_id": "6f0ad652-a621-4414-b89a-e606ef403aae",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=7s): t0:s11a18y15 t1:s11a14y15 t2:s11a14y15 t3:s11a18y15 t4:s11a16y15 t5:s11a15y15 t6:s11a17y15 t7:s11a16y16 t8:s11a16y16 t9:s11a17y16 t10:s11a17y16 t11:s11a17y16 t12:s11a15y16 t13:s11a14y16 t14:s11a15y16 t15:s11a15y16 t16:s11a15y16 t17:s11a14y16 t18:s11a13y16 t19:s11a14y16",
+ "instruction": "At frame 8. Track #58 is a automobile at 124 m, azimuth +0 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s 121 m az -0 deg; +2s 119 m az -1 deg; +3s 118 m az -2 deg",
+ "rationale": "#58 automobile is at 124 m az +0 deg now, camera az +0 deg, radar 4 returns at 123 m, radial -3.6 m/s, so it is closing: radial velocity times time is the change in range.",
+ "cot_target": "{\"rationale\": \"#58 automobile is at 124 m az +0 deg now, camera az +0 deg, radar 4 returns at 123 m, radial -3.6 m/s, so it is closing: radial velocity times time is the change in range.\", \"answer\": \"+1s 121 m az -0 deg; +2s 119 m az -1 deg; +3s 118 m az -2 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 13357,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/07"
+}

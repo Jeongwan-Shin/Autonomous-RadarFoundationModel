@@ -1,0 +1,21 @@
+{
+ "id": "motion_seg_azdeg/01",
+ "task": "motion_seg_azdeg",
+ "clip_id": "95e5c9a2-8514-4101-937c-72ed07d4e996",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=2s): t0:s19a10y15 t1:s19a20y15 t2:s19a24y15 t3:s19a14y16 t4:s19a12y15 t5:s19a16y16 t6:s19a22y16 t7:s19a24y16 t8:s20a12y16 t9:s19a8y15 t10:s19a21y15 t11:s19a21y15 t12:s19a22y15 t13:s20a17y14 t14:s20a17y14 t15:s20a17y14 t16:s20a18y14 t17:s20a16y14 t18:s20a15y14 t19:s20a16y14",
+ "instruction": "At frame 3. Which objects ahead are moving and which are stationary? Use the radar Doppler and the camera. Identify each as range in metres and azimuth in degrees.",
+ "target": "moving: automobile 24 m az +15 deg, automobile 38 m az +37 deg. stationary: none.",
+ "rationale": "The ego is travelling at 20.2 m/s, yaw -2.5 deg/s. automobile at 24 m az +15 deg: radar expects -19.6 m/s if stationary, measures +11.0 (residual 30.6), camera expects az +137 deg if stationary, sees +15 (residual 122.6 deg); automobile at 38 m az +37 deg: no radar return. A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.",
+ "cot_target": "{\"rationale\": \"The ego is travelling at 20.2 m/s, yaw -2.5 deg/s. automobile at 24 m az +15 deg: radar expects -19.6 m/s if stationary, measures +11.0 (residual 30.6), camera expects az +137 deg if stationary, sees +15 (residual 122.6 deg); automobile at 38 m az +37 deg: no radar return. A radial residual above 1 m/s or a bearing residual above 1 deg means the object is moving; the Doppler is blind to an object crossing the ego's path and the bearing is blind to one approaching head-on, so either is enough.\", \"answer\": \"moving: automobile 24 m az +15 deg, automobile 38 m az +37 deg. stationary: none.\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 2926,
+ "radar_scans": 20,
+ "raw": "raw/motion_seg_azdeg/01"
+}

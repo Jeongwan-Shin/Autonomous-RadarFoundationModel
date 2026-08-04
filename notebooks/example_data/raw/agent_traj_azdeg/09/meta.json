@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/09",
+ "task": "agent_traj_azdeg",
+ "clip_id": "aa4daacf-3f23-4f97-a158-886d739e12d8",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=17s): t0:s13a15y16 t1:s13a14y16 t2:s13a14y16 t3:s13a16y16 t4:s13a16y16 t5:s13a15y16 t6:s13a15y16 t7:s13a15y16 t8:s13a13y16 t9:s13a14y16 t10:s13a15y16 t11:s13a15y16 t12:s13a14y16 t13:s13a14y16 t14:s13a15y16 t15:s13a14y16 t16:s13a15y16 t17:s13a15y16 t18:s13a14y16 t19:s13a14y16",
+ "instruction": "At frame 18. Track #11 is a automobile at 22 m, azimuth -8 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s 21 m az -9 deg; +2s 20 m az -10 deg; +3s 18 m az -11 deg",
+ "rationale": "#11 automobile is at 22 m az -8 deg now, camera az -9 deg, radar 7 returns at 21 m, radial -0.3 m/s, so it is holding its range: radial velocity times time is the change in range.",
+ "cot_target": "{\"rationale\": \"#11 automobile is at 22 m az -8 deg now, camera az -9 deg, radar 7 returns at 21 m, radial -0.3 m/s, so it is holding its range: radial velocity times time is the change in range.\", \"answer\": \"+1s 21 m az -9 deg; +2s 20 m az -10 deg; +3s 18 m az -11 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 5736,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/09"
+}

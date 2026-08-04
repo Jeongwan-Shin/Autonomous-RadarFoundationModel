@@ -1,0 +1,21 @@
+{
+ "id": "plan_ego_control/09",
+ "task": "plan_ego_control",
+ "clip_id": "324b6774-b88d-440c-a805-557d554784dc",
+ "sensors": "Sensors present: camera, ego motion, no radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=11s): t0:s10a16y20 t1:s10a16y20 t2:s11a17y17 t3:s11a17y16 t4:s11a17y16 t5:s12a17y15 t6:s12a16y16 t7:s12a16y17 t8:s12a15y19 t9:s11a15y20 t10:s12a15y18 t11:s11a15y19 t12:s12a16y17 t13:s12a16y17 t14:s12a16y17 t15:s12a16y18 t16:s12a15y17 t17:s12a15y14 t18:s11a16y14 t19:s11a15y14",
+ "instruction": "At frame 12. Predict the ego vehicle's speed and yaw rate over the next 3 seconds.",
+ "target": "+1s 12.1 m/s, yaw +2.7 deg/s; +2s 12.2 m/s, yaw +2.4 deg/s; +3s 12.3 m/s, yaw +2.8 deg/s",
+ "rationale": "The ego vehicle is travelling at 12.0 m/s and will hold speed and turn left. At that speed it covers about 12 m per second.",
+ "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 12.0 m/s and will hold speed and turn left. At that speed it covers about 12 m per second.\", \"answer\": \"+1s 12.1 m/s, yaw +2.7 deg/s; +2s 12.2 m/s, yaw +2.4 deg/s; +3s 12.3 m/s, yaw +2.8 deg/s\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 0,
+ "radar_scans": 20,
+ "raw": "raw/plan_ego_control/09"
+}

@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_bbox/00",
+ "task": "agent_traj_bbox",
+ "clip_id": "100cd730-e27e-4f84-bbd9-aeff3c0d0451",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=13s): t0:s14a12y17 t1:s14a11y17 t2:s14a13y17 t3:s14a12y17 t4:s14a11y18 t5:s14a12y18 t6:s14a11y18 t7:s14a11y17 t8:s13a12y17 t9:s13a11y18 t10:s13a12y18 t11:s13a12y18 t12:s13a13y18 t13:s13a15y18 t14:s13a14y18 t15:s13a14y18 t16:s13a15y18 t17:s13a16y18 t18:s13a14y18 t19:s13a15y17",
+ "instruction": "At frame 14. Track #14 is a heavy_truck at 121 m, azimuth +7 deg. Where will it be over the next 3 seconds? Answer as an image bounding box [x1, y1, x2, y2] normalised to 0-1000, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s [421, 665, 433, 692]; +2s [406, 670, 420, 696]; +3s [398, 668, 414, 693]",
+ "rationale": "#14 heavy_truck is at 121 m az +7 deg now, camera az +7 deg, radar 19 returns at 119 m, radial +6.1 m/s, so it is receding: radial velocity times time is the change in range.",
+ "cot_target": "{\"rationale\": \"#14 heavy_truck is at 121 m az +7 deg now, camera az +7 deg, radar 19 returns at 119 m, radial +6.1 m/s, so it is receding: radial velocity times time is the change in range.\", \"answer\": \"+1s [421, 665, 433, 692]; +2s [406, 670, 420, 696]; +3s [398, 668, 414, 693]\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 15838,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_bbox/00"
+}

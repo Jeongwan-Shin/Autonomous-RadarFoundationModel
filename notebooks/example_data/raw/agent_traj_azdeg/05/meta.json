@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/05",
+ "task": "agent_traj_azdeg",
+ "clip_id": "a74a7974-9053-47ff-bcd3-3f5166b8d9dc",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=3s): t0:s0a16y16 t1:s0a15y16 t2:s0a16y15 t3:s0a15y15 t4:s0a15y16 t5:s0a16y15 t6:s0a16y16 t7:s0a16y16 t8:s0a16y15 t9:s0a15y15 t10:s0a15y16 t11:s0a16y16 t12:s0a16y16 t13:s0a16y16 t14:s0a16y15 t15:s0a15y15 t16:s0a16y16 t17:s0a16y16 t18:s0a16y16 t19:s0a16y15",
+ "instruction": "At frame 4. Track #54 is a automobile at 6 m, azimuth -43 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s 6 m az -43 deg; +2s 6 m az -43 deg; +3s 6 m az -48 deg",
+ "rationale": "#54 automobile is at 6 m az -43 deg now, camera az -39 deg, no radar return, so its speed is not measured.",
+ "cot_target": "{\"rationale\": \"#54 automobile is at 6 m az -43 deg now, camera az -39 deg, no radar return, so its speed is not measured.\", \"answer\": \"+1s 6 m az -43 deg; +2s 6 m az -43 deg; +3s 6 m az -48 deg\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 2324,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/05"
+}

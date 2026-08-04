@@ -1,0 +1,21 @@
+{
+ "id": "qa/04",
+ "task": "qa",
+ "clip_id": "4e7dd4f1-6416-4050-89cf-4395fd4195de",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t5): t0:s0a13y16 t1:s0a15y16 t2:s0a16y15 t3:s0a14y16 t4:s1a21y15 t5:s2a20y15",
+ "instruction": "At Frame 6, which lateral maneuver should ego avoid?\nA. Maintain current lane.\nB. Gently move left.\nC. Gently move right.\nD. Rapidly swerve left.\nE. Rapidly swerve right.\nReason step by step, then answer with the letter.",
+ "target": "D",
+ "rationale": "At Frame 6, the ego vehicle is accelerating in its lane with no immediate threats requiring evasive action. Rapidly swerving left (or right) would be an unsafe and unnecessary maneuver, potentially destabilizing the vehicle or causing a collision with adjacent traffic. Therefore, rapidly swerving left should be avoided.",
+ "cot_target": "{\"rationale\": \"At Frame 6, the ego vehicle is accelerating in its lane with no immediate threats requiring evasive action. Rapidly swerving left (or right) would be an unsafe and unnecessary maneuver, potentially destabilizing the vehicle or causing a collision with adjacent traffic. Therefore, rapidly swerving left should be avoided.\", \"answer\": \"D\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 9412,
+ "radar_scans": 20,
+ "raw": "raw/qa/04"
+}

@@ -1,0 +1,21 @@
+{
+ "id": "qa/07",
+ "task": "qa",
+ "clip_id": "2381b44e-3f17-4853-8990-cd5ff98d126f",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t4): t0:s15a15y15 t1:s14a12y16 t2:s13a11y16 t3:s11a5y15 t4:s9a3y15",
+ "instruction": "At frame 5, what is the straight-line ground distance to the oncoming white sedan with bright headlights?\nA. 16.8 meters.\nB. 8.8 meters.\nC. 12.8 meters.\nD. 20.8 meters.\nE. 24.8 meters.\nReason step by step, then answer with the letter.",
+ "target": "A",
+ "rationale": "At Frame 5, the metadata for the oncoming white sedan with bright headlights explicitly states its distance from the ego vehicle as 16.8m.",
+ "cot_target": "{\"rationale\": \"At Frame 5, the metadata for the oncoming white sedan with bright headlights explicitly states its distance from the ego vehicle as 16.8m.\", \"answer\": \"A\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 16775,
+ "radar_scans": 20,
+ "raw": "raw/qa/07"
+}

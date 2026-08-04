@@ -1,0 +1,21 @@
+{
+ "id": "qa/08",
+ "task": "qa",
+ "clip_id": "10babd80-87d7-417a-90cd-4742f5275591",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t10): t0:s7a13y17 t1:s6a13y20 t2:s6a13y19 t3:s5a13y20 t4:s4a12y21 t5:s3a9y22 t6:s2a16y22 t7:s2a15y23 t8:s2a16y24 t9:s2a16y22 t10:s3a18y18",
+ "instruction": "At Frame 11, how is the pedestrian positioned relative to the ego's immediate path?\nA. Directly ahead of ego.\nB. Significantly to ego's left.\nC. Significantly to ego's right.\nD. Slightly to ego's left.\nE. Directly behind ego.\nReason step by step, then answer with the letter.",
+ "target": "C",
+ "rationale": "At Frame 11, the ego vehicle's current position is (33.40, 16.21) with a yaw of 1.462 radians (approximately 83.8 degrees, nearly aligned with the positive Y-axis). The pedestrian on the center is at position (42.58, 52.64). The pedestrian's X-coordinate (42.58) is considerably greater than the ego's X-coordinate (33.40), indicating the pedestrian is to the right of the ego's forward direction. The pedestrian is also far ahead in the Y-coordinate. Therefore, the pedestrian is significantly to the ego's right.",
+ "cot_target": "{\"rationale\": \"At Frame 11, the ego vehicle's current position is (33.40, 16.21) with a yaw of 1.462 radians (approximately 83.8 degrees, nearly aligned with the positive Y-axis). The pedestrian on the center is at position (42.58, 52.64). The pedestrian's X-coordinate (42.58) is considerably greater than the ego's X-coordinate (33.40), indicating the pedestrian is to the right of the ego's forward direction. The pedestrian is also far ahead in the Y-coordinate. Therefore, the pedestrian is significantly to the ego's right.\", \"answer\": \"C\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 14243,
+ "radar_scans": 20,
+ "raw": "raw/qa/08"
+}

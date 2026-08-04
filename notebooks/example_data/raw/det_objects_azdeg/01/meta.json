@@ -1,0 +1,21 @@
+{
+ "id": "det_objects_azdeg/01",
+ "task": "det_objects_azdeg",
+ "clip_id": "e13b4b35-3011-4fd3-a21b-eb839a5a3523",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, at t=12s): t0:s17a13y16",
+ "instruction": "At frame 13. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "heavy_truck 36 m az +1 deg",
+ "rationale": "heavy_truck: camera az +0 deg, radar 20 returns at 34 m az +1 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"heavy_truck: camera az +0 deg, radar 20 returns at 34 m az +1 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"heavy_truck 36 m az +1 deg\"}",
+ "window": {
+  "kind": "instant",
+  "seconds": 1,
+  "radar_hz": 20,
+  "video_frames": 1
+ },
+ "n_frames": 1,
+ "radar_points": 12747,
+ "radar_scans": 20,
+ "raw": "raw/det_objects_azdeg/01"
+}

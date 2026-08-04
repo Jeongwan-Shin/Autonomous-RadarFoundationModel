@@ -1,0 +1,21 @@
+{
+ "id": "track_step_bbox/08",
+ "task": "track_step_bbox",
+ "clip_id": "50543d56-9a2c-4021-98bd-abd47a281233",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=18s): t0:s9a18y8 t1:s9a18y8 t2:s9a19y8 t3:s9a17y8 t4:s9a17y8 t5:s9a16y8 t6:s9a18y7 t7:s10a16y7 t8:s10a17y7 t9:s10a16y6 t10:s10a15y6 t11:s10a16y6 t12:s10a16y6 t13:s10a15y6 t14:s10a15y6 t15:s10a16y7 t16:s10a15y8 t17:s10a14y9 t18:s10a14y12 t19:s10a15y13",
+ "instruction": "At frame 19. Previous detections:\nt-4s: #26 automobile [211, 672, 358, 799]; #42 automobile [350, 678, 426, 734]; #50 person [617, 667, 623, 688]; #48 automobile [581, 668, 615, 689]; #49 person [619, 666, 625, 687]; #47 automobile [544, 660, 591, 690]\nt-3s: #26 automobile [0, 670, 44, 873]; #42 automobile [133, 681, 237, 774]; #50 person [516, 669, 523, 695]; #48 automobile [476, 669, 516, 694]; #47 automobile [434, 659, 486, 694]\nt-2s: #50 person [384, 669, 391, 700]; #48 automobile [335, 667, 383, 699]; #47 automobile [286, 655, 347, 698]; #51 automobile [694, 664, 711, 688]\nt-1s: #50 person [209, 671, 218, 712]; #48 automobile [152, 670, 207, 712]; #47 automobile [103, 654, 168, 711]; #53 automobile [12, 676, 39, 706]; #51 automobile [592, 668, 611, 695]; #52 automobile [605, 669, 614, 682]\nContinue tracking: list the road users at this instant with its class and image bounding box [x1, y1, x2, y2] normalised to 0-1000, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "#48 automobile [0, 703, 27, 762]; #50 person [24, 702, 36, 756]; #59 person [8, 701, 22, 756]; #47 automobile [0, 680, 9, 754]; #51 automobile [523, 667, 544, 699]; #52 automobile [533, 668, 543, 682]",
+ "rationale": "#48 automobile: was at 38 m az +36 deg, camera az +58 deg, no radar return; #50 person: was at 38 m az +32 deg, camera az +56 deg, no radar return; #59 person: newly seen, camera az +58 deg, 96% occluded, no radar return; #47 automobile: was at 43 m az +41 deg, camera az +59 deg, 75% occluded, no radar return; #51 automobile: was at 59 m az -12 deg, camera az -4 deg, radar 5 returns at 49 m az -5 deg; #52 automobile: was at 105 m az -13 deg, camera az -5 deg, 100% occluded, radar 2 returns at 95 m az -5 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"#48 automobile: was at 38 m az +36 deg, camera az +58 deg, no radar return; #50 person: was at 38 m az +32 deg, camera az +56 deg, no radar return; #59 person: newly seen, camera az +58 deg, 96% occluded, no radar return; #47 automobile: was at 43 m az +41 deg, camera az +59 deg, 75% occluded, no radar return; #51 automobile: was at 59 m az -12 deg, camera az -4 deg, radar 5 returns at 49 m az -5 deg; #52 automobile: was at 105 m az -13 deg, camera az -5 deg, 100% occluded, radar 2 returns at 95 m az -5 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"#48 automobile [0, 703, 27, 762]; #50 person [24, 702, 36, 756]; #59 person [8, 701, 22, 756]; #47 automobile [0, 680, 9, 754]; #51 automobile [523, 667, 544, 699]; #52 automobile [533, 668, 543, 682]\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 14390,
+ "radar_scans": 20,
+ "raw": "raw/track_step_bbox/08"
+}

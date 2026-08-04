@@ -1,0 +1,21 @@
+{
+ "id": "track_step_bbox/00",
+ "task": "track_step_bbox",
+ "clip_id": "e6263aed-1a28-40b7-a84b-c4116fe03ff2",
+ "sensors": "Sensors present: camera, ego motion, no radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=12s): t0:s18a15y15 t1:s18a16y15 t2:s18a16y15 t3:s18a15y14 t4:s18a16y14 t5:s18a16y14 t6:s18a15y14 t7:s18a16y14 t8:s18a15y14 t9:s18a15y14 t10:s18a15y14 t11:s17a14y15 t12:s17a13y16 t13:s16a12y17 t14:s16a13y14 t15:s15a11y14 t16:s14a11y15 t17:s12a10y15 t18:s11a8y15 t19:s9a7y15",
+ "instruction": "At frame 13. Previous detections:\nt-4s: #21 automobile [294, 681, 366, 751]; #6 automobile [499, 680, 532, 724]; #24 automobile [453, 684, 472, 705]; #7 trailer [544, 682, 556, 697]; #10 automobile [556, 684, 563, 695]; #30 automobile [563, 680, 569, 691]\nt-3s: #24 automobile [333, 684, 383, 733]; #6 automobile [497, 682, 528, 724]; #7 trailer [532, 683, 544, 699]; #10 automobile [542, 685, 550, 696]; #30 automobile [546, 681, 553, 692]; #32 automobile [551, 683, 557, 692]\nt-2s: #6 automobile [492, 681, 522, 722]; #7 trailer [517, 682, 529, 699]; #10 automobile [526, 685, 534, 696]; #33 automobile [514, 684, 521, 694]; #30 automobile [528, 681, 536, 693]; #34 automobile [542, 683, 549, 691]; #35 automobile [382, 692, 394, 700]\nt-1s: #6 automobile [486, 682, 515, 723]; #7 trailer [507, 683, 520, 700]; #10 automobile [514, 686, 522, 698]; #33 automobile [501, 686, 508, 696]; #30 automobile [524, 681, 536, 694]; #38 automobile [308, 697, 325, 708]; #37 automobile [309, 697, 325, 707]; #36 automobile [307, 697, 320, 706]\nContinue tracking: list the road users at this instant with its class and image bounding box [x1, y1, x2, y2] normalised to 0-1000, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "#6 automobile [491, 683, 519, 723]; #7 trailer [510, 684, 524, 702]; #10 automobile [518, 684, 527, 697]; #33 automobile [504, 684, 514, 695]; #30 automobile [542, 677, 557, 691]; #38 automobile [309, 698, 328, 710]; #36 automobile [232, 705, 246, 715]; #40 automobile [526, 684, 532, 692]",
+ "rationale": "#6 automobile: was at 35 m az -0 deg, camera az -1 deg, no radar return; #7 trailer: was at 90 m az -2 deg, camera az -2 deg, 69% occluded, no radar return; #10 automobile: was at 115 m az -2 deg, camera az -3 deg, 73% occluded, no radar return; #33 automobile: was at 131 m az -1 deg, camera az -1 deg, 100% occluded, no radar return; #30 automobile: was at 135 m az -4 deg, camera az -6 deg, no radar return; #38 automobile: was at 162 m az +21 deg, camera az +21 deg, no radar return; #36 automobile: was at 176 m az +21 deg, camera az +30 deg, no radar return; #40 automobile: newly seen, camera az -4 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"#6 automobile: was at 35 m az -0 deg, camera az -1 deg, no radar return; #7 trailer: was at 90 m az -2 deg, camera az -2 deg, 69% occluded, no radar return; #10 automobile: was at 115 m az -2 deg, camera az -3 deg, 73% occluded, no radar return; #33 automobile: was at 131 m az -1 deg, camera az -1 deg, 100% occluded, no radar return; #30 automobile: was at 135 m az -4 deg, camera az -6 deg, no radar return; #38 automobile: was at 162 m az +21 deg, camera az +21 deg, no radar return; #36 automobile: was at 176 m az +21 deg, camera az +30 deg, no radar return; #40 automobile: newly seen, camera az -4 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"#6 automobile [491, 683, 519, 723]; #7 trailer [510, 684, 524, 702]; #10 automobile [518, 684, 527, 697]; #33 automobile [504, 684, 514, 695]; #30 automobile [542, 677, 557, 691]; #38 automobile [309, 698, 328, 710]; #36 automobile [232, 705, 246, 715]; #40 automobile [526, 684, 532, 692]\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 0,
+ "radar_scans": 20,
+ "raw": "raw/track_step_bbox/00"
+}

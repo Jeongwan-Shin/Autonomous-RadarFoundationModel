@@ -1,0 +1,21 @@
+{
+ "id": "track_step_bbox/05",
+ "task": "track_step_bbox",
+ "clip_id": "a719b876-d833-472d-8ed0-710c44bb6431",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 5 s at 4 Hz, ending at t=12s): t0:s18a16y17 t1:s18a15y17 t2:s18a15y17 t3:s18a16y17 t4:s18a15y17 t5:s18a15y17 t6:s18a13y17 t7:s18a14y17 t8:s18a14y17 t9:s18a15y17 t10:s18a15y16 t11:s18a15y16 t12:s18a16y16 t13:s18a16y16 t14:s18a16y16 t15:s18a15y16 t16:s18a18y16 t17:s18a16y16 t18:s18a16y16 t19:s18a16y16",
+ "instruction": "At frame 13. Previous detections:\nt-4s: #6 automobile [417, 676, 431, 694]; #1 automobile [463, 675, 477, 693]\nt-3s: #6 automobile [382, 668, 413, 703]; #1 automobile [468, 672, 482, 690]\nt-2s: #6 automobile [0, 661, 141, 895]; #1 automobile [473, 675, 486, 693]\nt-1s: #1 automobile [471, 675, 484, 693]\nContinue tracking: list the road users at this instant with its class and image bounding box [x1, y1, x2, y2] normalised to 0-1000, reusing the id each object already has and giving a new id to anything not seen before.",
+ "target": "#1 automobile [470, 674, 483, 692]",
+ "rationale": "#1 automobile: was at 79 m az +2 deg, camera az +3 deg, radar 1 return at 79 m az +2 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"#1 automobile: was at 79 m az +2 deg, camera az +3 deg, radar 1 return at 79 m az +2 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"#1 automobile [470, 674, 483, 692]\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 5,
+  "radar_hz": 4,
+  "video_frames": 5
+ },
+ "n_frames": 5,
+ "radar_points": 14986,
+ "radar_scans": 20,
+ "raw": "raw/track_step_bbox/05"
+}

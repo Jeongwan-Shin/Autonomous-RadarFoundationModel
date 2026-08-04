@@ -1,0 +1,21 @@
+{
+ "id": "agent_traj_azdeg/03",
+ "task": "agent_traj_azdeg",
+ "clip_id": "16f01ed1-c120-40ba-9997-06b4ebe3989c",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=7s): t0:s0a14y16 t1:s0a16y15 t2:s0a16y15 t3:s0a15y16 t4:s0a15y16 t5:s0a17y15 t6:s0a16y15 t7:s0a16y15 t8:s0a16y15 t9:s0a15y15 t10:s0a15y15 t11:s0a16y15 t12:s0a16y15 t13:s0a16y15 t14:s0a17y15 t15:s1a17y15 t16:s1a17y15 t17:s1a17y15 t18:s1a17y15 t19:s1a18y15",
+ "instruction": "At frame 8. Track #7 is a automobile at 166 m, azimuth +3 deg. Where will it be over the next 3 seconds? Answer as range in metres and azimuth in degrees, or say 'leaves the forward sector' for a horizon it does not reach.",
+ "target": "+1s 182 m az +5 deg; +2s leaves the forward sector",
+ "rationale": "#7 automobile is at 166 m az +3 deg now, camera az +3 deg, no radar return, so its speed is not measured, and it leaves the forward sector inside the horizon.",
+ "cot_target": "{\"rationale\": \"#7 automobile is at 166 m az +3 deg now, camera az +3 deg, no radar return, so its speed is not measured, and it leaves the forward sector inside the horizon.\", \"answer\": \"+1s 182 m az +5 deg; +2s leaves the forward sector\"}",
+ "window": {
+  "kind": "window",
+  "seconds": 2,
+  "radar_hz": 10,
+  "video_frames": 2
+ },
+ "n_frames": 2,
+ "radar_points": 13767,
+ "radar_scans": 20,
+ "raw": "raw/agent_traj_azdeg/03"
+}

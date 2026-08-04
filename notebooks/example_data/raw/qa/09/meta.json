@@ -1,0 +1,21 @@
+{
+ "id": "qa/09",
+ "task": "qa",
+ "clip_id": "4b2e4c9d-c27d-4b8d-b89f-5fb5dc5da711",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, t0..t19): t0:s29a8y15 t1:s29a14y16 t2:s29a18y16 t3:s29a17y16 t4:s30a17y16 t5:s30a17y16 t6:s30a16y16 t7:s30a16y16 t8:s30a16y16 t9:s30a17y16 t10:s30a11y16 t11:s30a12y16 t12:s30a16y16 t13:s31a15y16 t14:s30a15y16 t15:s30a14y16 t16:s30a15y16 t17:s30a13y16 t18:s30a17y16 t19:s30a22y16",
+ "instruction": "How can ego best mitigate reduced visibility due to rain and night?\nA. Use high beams continuously.\nB. Significantly reduce speed.\nC. Follow vehicles more closely.\nD. Turn off all vehicle lights.\nE. Increase headlight brightness.\nReason step by step, then answer with the letter.",
+ "target": "E",
+ "rationale": "In conditions of reduced visibility due to rain and night, increasing headlight brightness (e.g., by using fog lights or ensuring adaptive headlights are optimized) directly enhances the ego vehicle's ability to see the road and other objects. While reducing speed is also critical, actively improving the visual input is a primary and effective mitigation strategy.",
+ "cot_target": "{\"rationale\": \"In conditions of reduced visibility due to rain and night, increasing headlight brightness (e.g., by using fog lights or ensuring adaptive headlights are optimized) directly enhances the ego vehicle's ability to see the road and other objects. While reducing speed is also critical, actively improving the visual input is a primary and effective mitigation strategy.\", \"answer\": \"E\"}",
+ "window": {
+  "kind": "clip",
+  "seconds": 20,
+  "radar_hz": 1,
+  "video_frames": 20
+ },
+ "n_frames": 20,
+ "radar_points": 8816,
+ "radar_scans": 20,
+ "raw": "raw/qa/09"
+}
