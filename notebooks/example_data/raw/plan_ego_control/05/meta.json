@@ -1,13 +1,13 @@
 {
  "id": "plan_ego_control/05",
  "task": "plan_ego_control",
- "clip_id": "9a914e17-2820-4c2e-be0b-1e280f3533c5",
- "sensors": "Sensors present: camera, ego motion, no radar.",
- "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=3s): t0:s8a17y18 t1:s8a15y18 t2:s8a15y17 t3:s8a14y16 t4:s7a13y16 t5:s7a17y15 t6:s7a15y16 t7:s6a12y15 t8:s5a7y15 t9:s3a7y14 t10:s1a7y14 t11:s0a13y16 t12:s0a16y15 t13:s1a25y15 t14:s3a20y15 t15:s4a18y16 t16:s4a14y23 t17:s3a11y25 t18:s3a14y22 t19:s3a16y22",
- "instruction": "At frame 4. Predict the ego vehicle's speed and yaw rate over the next 3 seconds.",
- "target": "+1s 7.9 m/s, yaw +0.4 deg/s; +2s 7.9 m/s, yaw -0.2 deg/s; +3s 7.8 m/s, yaw +0.5 deg/s",
- "rationale": "The ego vehicle is travelling at 8.3 m/s and will hold speed and go straight. At that speed it covers about 8 m per second.",
- "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 8.3 m/s and will hold speed and go straight. At that speed it covers about 8 m per second.\", \"answer\": \"+1s 7.9 m/s, yaw +0.4 deg/s; +2s 7.9 m/s, yaw -0.2 deg/s; +3s 7.8 m/s, yaw +0.5 deg/s\"}",
+ "clip_id": "b516807f-01aa-4337-bc62-d333f5ab08ca",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=9s): t0:s3a18y15 t1:s3a17y16 t2:s3a14y16 t3:s3a15y16 t4:s3a14y15 t5:s3a11y15 t6:s3a11y15 t7:s2a12y16 t8:s2a9y16 t9:s2a10y16 t10:s2a12y16 t11:s2a9y16 t12:s2a9y15 t13:s2a13y15 t14:s1a12y15 t15:s1a9y16 t16:s1a9y16 t17:s1a11y16 t18:s1a12y16 t19:s1a12y16",
+ "instruction": "At frame 10. Predict the ego vehicle's speed and yaw rate over the next 3 seconds.",
+ "target": "+1s 1.1 m/s, yaw -0.0 deg/s; +2s 1.0 m/s, yaw +0.1 deg/s; +3s 0.4 m/s, yaw -0.0 deg/s",
+ "rationale": "The ego vehicle is travelling at 1.3 m/s and will hold speed and go straight. At that speed it covers about 1 m per second.",
+ "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 1.3 m/s and will hold speed and go straight. At that speed it covers about 1 m per second.\", \"answer\": \"+1s 1.1 m/s, yaw -0.0 deg/s; +2s 1.0 m/s, yaw +0.1 deg/s; +3s 0.4 m/s, yaw -0.0 deg/s\"}",
  "window": {
   "kind": "window",
   "seconds": 2,
@@ -15,7 +15,7 @@
   "video_frames": 2
  },
  "n_frames": 2,
- "radar_points": 0,
+ "radar_points": 1754,
  "radar_scans": 20,
  "raw": "raw/plan_ego_control/05"
 }

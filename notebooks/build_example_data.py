@@ -18,6 +18,10 @@
 레이더는 [20, 1024, 8] 텐서 그대로가 아니라 마스크가 참인 점만 저장한다. 패딩이
 대부분이라 그대로 두면 예제 하나가 327 kB 이고, 걸러내면 그 몇 분의 일이다.
 
+전방 레이더가 없는 클립은 17,130개, 전체의 9.6% 다. 그 비율은 학습에서 만나는
+사실이지만 예제로는 보여줄 것이 없으므로 기본적으로 건너뛴다. 비율 자체를 보고
+싶으면 `--any-radar` 로 그대로 뽑는다.
+
     python -m notebooks.build_example_data --per-task 10
 """
 
@@ -101,6 +105,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--per-task", type=int, default=10)
     ap.add_argument("--split", default="train")
+    ap.add_argument("--any-radar", action="store_true",
+                    help="전방 레이더가 없는 클립(전체의 9.6%)도 예제로 받는다. "
+                         "기본은 반사점이 있는 건만 골라, 예제를 여는 사람이 "
+                         "빈 산점도를 먼저 만나지 않게 한다")
     ap.add_argument("--samples", type=int, default=8000,
                     help="이 중에서 태스크마다 앞에서부터 --per-task 개를 고른다")
     args = ap.parse_args(argv)
@@ -122,6 +130,8 @@ def main(argv=None):
         if task not in filled or filled[task] >= args.per_task:
             continue
         sample = ds[i]
+        if not args.any_radar and not sample["mask"].any():
+            continue          # 리그에 전방 레이더가 없는 클립 — 반사점이 0개다
         try:
             payload = json.loads(sample["target"])
         except Exception:

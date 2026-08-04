@@ -1,13 +1,13 @@
 {
  "id": "det_objects_azdeg/00",
  "task": "det_objects_azdeg",
- "clip_id": "3dad7df2-56ac-42d7-8f08-aab0b61517bd",
- "sensors": "Sensors present: camera, ego motion, no radar.",
- "ego": "Ego motion (binned, at t=15s): t0:s8a15y12",
- "instruction": "At frame 16. List every road user in the forward sector with its class, range and azimuth.",
- "target": "person 30 m az -25 deg; person 31 m az -11 deg; automobile 35 m az -30 deg; automobile 35 m az -34 deg; automobile 36 m az -22 deg; automobile 36 m az -42 deg; automobile 37 m az -45 deg; automobile 46 m az -11 deg",
- "rationale": "person: camera az -27 deg, no radar return; person: camera az -12 deg, no radar return; automobile: camera az -31 deg, no radar return; automobile: camera az -36 deg, no radar return; automobile: camera az -23 deg, no radar return; automobile: camera az -44 deg, no radar return; automobile: camera az -47 deg, no radar return; automobile: camera az -12 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
- "cot_target": "{\"rationale\": \"person: camera az -27 deg, no radar return; person: camera az -12 deg, no radar return; automobile: camera az -31 deg, no radar return; automobile: camera az -36 deg, no radar return; automobile: camera az -23 deg, no radar return; automobile: camera az -44 deg, no radar return; automobile: camera az -47 deg, no radar return; automobile: camera az -12 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"person 30 m az -25 deg; person 31 m az -11 deg; automobile 35 m az -30 deg; automobile 35 m az -34 deg; automobile 36 m az -22 deg; automobile 36 m az -42 deg; automobile 37 m az -45 deg; automobile 46 m az -11 deg\"}",
+ "clip_id": "e13b4b35-3011-4fd3-a21b-eb839a5a3523",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, at t=12s): t0:s17a13y16",
+ "instruction": "At frame 13. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "heavy_truck 36 m az +1 deg",
+ "rationale": "heavy_truck: camera az +0 deg, radar 20 returns at 34 m az +1 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"heavy_truck: camera az +0 deg, radar 20 returns at 34 m az +1 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"heavy_truck 36 m az +1 deg\"}",
  "window": {
   "kind": "instant",
   "seconds": 1,
@@ -15,7 +15,7 @@
   "video_frames": 1
  },
  "n_frames": 1,
- "radar_points": 0,
+ "radar_points": 12747,
  "radar_scans": 20,
  "raw": "raw/det_objects_azdeg/00"
 }

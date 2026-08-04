@@ -1,13 +1,13 @@
 {
  "id": "det_objects_azdeg/05",
  "task": "det_objects_azdeg",
- "clip_id": "175d6a54-ae32-4ded-8a37-16258ccf2e55",
+ "clip_id": "16e0deee-e8d7-414a-8bf0-c22feda87875",
  "sensors": "Sensors present: camera, ego motion, short-range radar.",
- "ego": "Ego motion (binned, at t=6s): t0:s17a9y15",
- "instruction": "At frame 7. List every road user in the forward sector with its class, range and azimuth.",
- "target": "automobile 8 m az -43 deg; automobile 18 m az +45 deg; automobile 22 m az +34 deg; automobile 31 m az +6 deg; automobile 32 m az -1 deg; automobile 37 m az -24 deg; automobile 39 m az -33 deg; automobile 46 m az +29 deg",
- "rationale": "automobile: camera az -42 deg, radar 6 returns at 9 m az -32 deg; automobile: camera az +50 deg, radar 4 returns at 17 m az +43 deg; automobile: camera az +38 deg, radar 5 returns at 22 m az +34 deg; automobile: camera az +6 deg, radar 4 returns at 31 m az +5 deg; automobile: camera az -1 deg, radar 4 returns at 31 m az -1 deg; automobile: camera az -26 deg, radar 5 returns at 36 m az -22 deg; automobile: camera az -34 deg, radar 1 return at 38 m az -31 deg; automobile: camera az +31 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
- "cot_target": "{\"rationale\": \"automobile: camera az -42 deg, radar 6 returns at 9 m az -32 deg; automobile: camera az +50 deg, radar 4 returns at 17 m az +43 deg; automobile: camera az +38 deg, radar 5 returns at 22 m az +34 deg; automobile: camera az +6 deg, radar 4 returns at 31 m az +5 deg; automobile: camera az -1 deg, radar 4 returns at 31 m az -1 deg; automobile: camera az -26 deg, radar 5 returns at 36 m az -22 deg; automobile: camera az -34 deg, radar 1 return at 38 m az -31 deg; automobile: camera az +31 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile 8 m az -43 deg; automobile 18 m az +45 deg; automobile 22 m az +34 deg; automobile 31 m az +6 deg; automobile 32 m az -1 deg; automobile 37 m az -24 deg; automobile 39 m az -33 deg; automobile 46 m az +29 deg\"}",
+ "ego": "Ego motion (binned, at t=12s): t0:s2a24y21",
+ "instruction": "At frame 13. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "automobile 23 m az -8 deg; automobile 23 m az +56 deg; automobile 24 m az -55 deg; automobile 29 m az -6 deg; automobile 40 m az -5 deg; automobile 49 m az -4 deg; automobile 55 m az +5 deg",
+ "rationale": "automobile: camera az -9 deg, radar 4 returns at 22 m az -7 deg; automobile: camera az +57 deg, no radar return; automobile: camera az -57 deg, no radar return; automobile: camera az -7 deg, no radar return; automobile: camera az -5 deg, no radar return; automobile: camera az -4 deg, no radar return; automobile: camera az +5 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"automobile: camera az -9 deg, radar 4 returns at 22 m az -7 deg; automobile: camera az +57 deg, no radar return; automobile: camera az -57 deg, no radar return; automobile: camera az -7 deg, no radar return; automobile: camera az -5 deg, no radar return; automobile: camera az -4 deg, no radar return; automobile: camera az +5 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile 23 m az -8 deg; automobile 23 m az +56 deg; automobile 24 m az -55 deg; automobile 29 m az -6 deg; automobile 40 m az -5 deg; automobile 49 m az -4 deg; automobile 55 m az +5 deg\"}",
  "window": {
   "kind": "instant",
   "seconds": 1,
@@ -15,7 +15,7 @@
   "video_frames": 1
  },
  "n_frames": 1,
- "radar_points": 5813,
+ "radar_points": 2617,
  "radar_scans": 20,
  "raw": "raw/det_objects_azdeg/05"
 }

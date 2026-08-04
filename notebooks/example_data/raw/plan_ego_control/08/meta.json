@@ -1,13 +1,13 @@
 {
  "id": "plan_ego_control/08",
  "task": "plan_ego_control",
- "clip_id": "b516807f-01aa-4337-bc62-d333f5ab08ca",
- "sensors": "Sensors present: camera, ego motion, short-range radar.",
- "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=9s): t0:s3a18y15 t1:s3a17y16 t2:s3a14y16 t3:s3a15y16 t4:s3a14y15 t5:s3a11y15 t6:s3a11y15 t7:s2a12y16 t8:s2a9y16 t9:s2a10y16 t10:s2a12y16 t11:s2a9y16 t12:s2a9y15 t13:s2a13y15 t14:s1a12y15 t15:s1a9y16 t16:s1a9y16 t17:s1a11y16 t18:s1a12y16 t19:s1a12y16",
+ "clip_id": "e31e79de-5969-4514-a2e0-4907e0a8c10e",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=9s): t0:s8a17y15 t1:s8a17y15 t2:s8a16y15 t3:s8a17y15 t4:s8a17y16 t5:s8a17y16 t6:s8a16y16 t7:s8a16y16 t8:s8a15y16 t9:s8a15y16 t10:s8a16y16 t11:s8a15y16 t12:s8a13y16 t13:s8a16y15 t14:s8a16y15 t15:s8a14y15 t16:s8a13y15 t17:s8a14y15 t18:s8a15y15 t19:s8a13y15",
  "instruction": "At frame 10. Predict the ego vehicle's speed and yaw rate over the next 3 seconds.",
- "target": "+1s 1.1 m/s, yaw -0.0 deg/s; +2s 1.0 m/s, yaw +0.1 deg/s; +3s 0.4 m/s, yaw -0.0 deg/s",
- "rationale": "The ego vehicle is travelling at 1.3 m/s and will hold speed and go straight. At that speed it covers about 1 m per second.",
- "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 1.3 m/s and will hold speed and go straight. At that speed it covers about 1 m per second.\", \"answer\": \"+1s 1.1 m/s, yaw -0.0 deg/s; +2s 1.0 m/s, yaw +0.1 deg/s; +3s 0.4 m/s, yaw -0.0 deg/s\"}",
+ "target": "+1s 8.1 m/s, yaw +0.7 deg/s; +2s 7.7 m/s, yaw +2.2 deg/s; +3s 7.5 m/s, yaw +0.2 deg/s",
+ "rationale": "The ego vehicle is travelling at 8.6 m/s and will hold speed and go straight. At that speed it covers about 9 m per second.",
+ "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 8.6 m/s and will hold speed and go straight. At that speed it covers about 9 m per second.\", \"answer\": \"+1s 8.1 m/s, yaw +0.7 deg/s; +2s 7.7 m/s, yaw +2.2 deg/s; +3s 7.5 m/s, yaw +0.2 deg/s\"}",
  "window": {
   "kind": "window",
   "seconds": 2,
@@ -15,7 +15,7 @@
   "video_frames": 2
  },
  "n_frames": 2,
- "radar_points": 1754,
+ "radar_points": 13251,
  "radar_scans": 20,
  "raw": "raw/plan_ego_control/08"
 }

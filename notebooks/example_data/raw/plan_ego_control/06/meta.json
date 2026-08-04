@@ -1,13 +1,13 @@
 {
  "id": "plan_ego_control/06",
  "task": "plan_ego_control",
- "clip_id": "b81f3146-b395-4af3-bf05-adb191bcf141",
- "sensors": "Sensors present: camera, ego motion, no radar.",
- "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=11s): t0:s30a17y16 t1:s30a16y17 t2:s30a15y16 t3:s30a13y16 t4:s30a14y16 t5:s30a15y17 t6:s30a15y17 t7:s30a16y16 t8:s30a16y16 t9:s30a16y15 t10:s30a14y15 t11:s30a15y15 t12:s30a14y15 t13:s30a16y15 t14:s30a15y15 t15:s30a16y15 t16:s30a16y15 t17:s30a17y14 t18:s30a16y14 t19:s30a15y14",
- "instruction": "At frame 12. Predict the ego vehicle's speed and yaw rate over the next 3 seconds.",
- "target": "+1s 30.3 m/s, yaw -0.9 deg/s; +2s 30.3 m/s, yaw -0.6 deg/s; +3s 30.3 m/s, yaw -1.0 deg/s",
- "rationale": "The ego vehicle is travelling at 30.2 m/s and will hold speed and go straight. At that speed it covers about 30 m per second.",
- "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 30.2 m/s and will hold speed and go straight. At that speed it covers about 30 m per second.\", \"answer\": \"+1s 30.3 m/s, yaw -0.9 deg/s; +2s 30.3 m/s, yaw -0.6 deg/s; +3s 30.3 m/s, yaw -1.0 deg/s\"}",
+ "clip_id": "17a1c463-b8ab-4d4c-8e9a-b3a1f6a03dcc",
+ "sensors": "Sensors present: camera, ego motion, imaging long-range radar.",
+ "ego": "Ego motion (binned, 2 s at 10 Hz, ending at t=5s): t0:s12a14y20 t1:s12a14y20 t2:s11a13y19 t3:s11a12y19 t4:s11a11y18 t5:s11a11y18 t6:s11a10y18 t7:s11a10y17 t8:s11a11y17 t9:s11a11y17 t10:s11a10y16 t11:s10a11y16 t12:s10a10y16 t13:s10a10y16 t14:s10a11y16 t15:s10a11y16 t16:s10a11y16 t17:s10a11y16 t18:s10a10y15 t19:s9a11y15",
+ "instruction": "At frame 6. Predict the ego vehicle's speed and yaw rate over the next 3 seconds.",
+ "target": "+1s 9.0 m/s, yaw -0.2 deg/s; +2s 7.6 m/s, yaw -2.1 deg/s; +3s 5.9 m/s, yaw -5.3 deg/s",
+ "rationale": "The ego vehicle is travelling at 10.0 m/s and will brake and go straight. At that speed it covers about 10 m per second.",
+ "cot_target": "{\"rationale\": \"The ego vehicle is travelling at 10.0 m/s and will brake and go straight. At that speed it covers about 10 m per second.\", \"answer\": \"+1s 9.0 m/s, yaw -0.2 deg/s; +2s 7.6 m/s, yaw -2.1 deg/s; +3s 5.9 m/s, yaw -5.3 deg/s\"}",
  "window": {
   "kind": "window",
   "seconds": 2,
@@ -15,7 +15,7 @@
   "video_frames": 2
  },
  "n_frames": 2,
- "radar_points": 0,
+ "radar_points": 11150,
  "radar_scans": 20,
  "raw": "raw/plan_ego_control/06"
 }

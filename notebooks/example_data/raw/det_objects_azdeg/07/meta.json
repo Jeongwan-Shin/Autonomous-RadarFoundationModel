@@ -1,13 +1,13 @@
 {
  "id": "det_objects_azdeg/07",
  "task": "det_objects_azdeg",
- "clip_id": "4da2cf80-7113-40e3-9fe1-b7a986d8469e",
- "sensors": "Sensors present: camera, ego motion, no radar.",
- "ego": "Ego motion (binned, at t=9s): t0:s12a14y15",
- "instruction": "At frame 10. List every road user in the forward sector with its class, range and azimuth.",
- "target": "automobile 9 m az +60 deg; automobile 16 m az +45 deg; automobile 26 m az +57 deg; automobile 27 m az +7 deg; automobile 28 m az +14 deg; automobile 30 m az +59 deg; automobile 32 m az -1 deg; automobile 33 m az +19 deg",
- "rationale": "automobile: camera az +58 deg, no radar return; automobile: camera az +51 deg, no radar return; automobile: camera az +58 deg, no radar return; automobile: camera az +8 deg, no radar return; automobile: camera az +16 deg, no radar return; automobile: camera az +59 deg, no radar return; automobile: camera az -1 deg, no radar return; automobile: camera az +21 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.",
- "cot_target": "{\"rationale\": \"automobile: camera az +58 deg, no radar return; automobile: camera az +51 deg, no radar return; automobile: camera az +58 deg, no radar return; automobile: camera az +8 deg, no radar return; automobile: camera az +16 deg, no radar return; automobile: camera az +59 deg, no radar return; automobile: camera az -1 deg, no radar return; automobile: camera az +21 deg, no radar return. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile 9 m az +60 deg; automobile 16 m az +45 deg; automobile 26 m az +57 deg; automobile 27 m az +7 deg; automobile 28 m az +14 deg; automobile 30 m az +59 deg; automobile 32 m az -1 deg; automobile 33 m az +19 deg\"}",
+ "clip_id": "2dda5c4f-e64c-46df-8896-69b465beb06e",
+ "sensors": "Sensors present: camera, ego motion, short-range radar.",
+ "ego": "Ego motion (binned, at t=6s): t0:s10a13y15",
+ "instruction": "At frame 7. List every road user in the forward sector with its class, range and azimuth.",
+ "target": "automobile 7 m az +43 deg; automobile 12 m az -35 deg; automobile 21 m az -1 deg; automobile 30 m az +5 deg; automobile 35 m az -8 deg; automobile 39 m az -14 deg; automobile 47 m az +6 deg; heavy_truck 54 m az -8 deg",
+ "rationale": "automobile: camera az +40 deg, radar 3 returns at 8 m az +35 deg; automobile: camera az -42 deg, radar 5 returns at 11 m az -38 deg; automobile: camera az -1 deg, radar 7 returns at 21 m az -2 deg; automobile: camera az +5 deg, radar 5 returns at 28 m az +5 deg; automobile: camera az -9 deg, radar 3 returns at 34 m az -8 deg; automobile: camera az -14 deg, radar 4 returns at 39 m az -13 deg; automobile: camera az +6 deg, radar 1 return at 48 m az +5 deg; heavy_truck: camera az -8 deg, radar 10 returns at 58 m az -7 deg. Range comes from the radar where it has a return and from the camera alone where it does not.",
+ "cot_target": "{\"rationale\": \"automobile: camera az +40 deg, radar 3 returns at 8 m az +35 deg; automobile: camera az -42 deg, radar 5 returns at 11 m az -38 deg; automobile: camera az -1 deg, radar 7 returns at 21 m az -2 deg; automobile: camera az +5 deg, radar 5 returns at 28 m az +5 deg; automobile: camera az -9 deg, radar 3 returns at 34 m az -8 deg; automobile: camera az -14 deg, radar 4 returns at 39 m az -13 deg; automobile: camera az +6 deg, radar 1 return at 48 m az +5 deg; heavy_truck: camera az -8 deg, radar 10 returns at 58 m az -7 deg. Range comes from the radar where it has a return and from the camera alone where it does not.\", \"answer\": \"automobile 7 m az +43 deg; automobile 12 m az -35 deg; automobile 21 m az -1 deg; automobile 30 m az +5 deg; automobile 35 m az -8 deg; automobile 39 m az -14 deg; automobile 47 m az +6 deg; heavy_truck 54 m az -8 deg\"}",
  "window": {
   "kind": "instant",
   "seconds": 1,
@@ -15,7 +15,7 @@
   "video_frames": 1
  },
  "n_frames": 1,
- "radar_points": 0,
+ "radar_points": 2951,
  "radar_scans": 20,
  "raw": "raw/det_objects_azdeg/07"
 }
