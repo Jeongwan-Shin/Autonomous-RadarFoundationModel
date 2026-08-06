@@ -185,8 +185,19 @@ def build(args, rank):
     weight_dtype = (torch.float32
                     if args.stage == "full" and args.master_dtype == "fp32"
                     else torch.bfloat16)
+    # `--resume` used to restore the connector and the encoder and leave the
+    # language model at its released weights, which for a `full` run silently
+    # threw away everything the run had learnt -- the 17.5 GB it had just
+    # written was never read back. Take the saved weights when they are there,
+    # the way `train_grpo --init` already does.
+    trained_weights = (os.path.join(args.resume, "model") if args.resume
+                       else None)
+    source = (trained_weights if trained_weights
+              and os.path.isdir(trained_weights) else model_dir)
+    if source != model_dir:
+        log(rank, f"language model resumed from {source}")
     llm = AutoModelForImageTextToText.from_pretrained(
-        model_dir, dtype=weight_dtype,
+        source, dtype=weight_dtype,
         attn_implementation="sdpa").to(torch.cuda.current_device())
 
     pad_id = add_radar_tokens(tokenizer, llm)
@@ -384,7 +395,12 @@ def main(argv=None):
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--steps", type=int, default=0)
     ap.add_argument("--workers", type=int, default=6)
-    ap.add_argument("--max-length", type=int, default=4096)
+    ap.add_argument("--max-length", type=int, default=3584,
+                    help="was 4096. The longest item in the build is 3,404 "
+                         "tokens, so 4,096 never bounded anything real -- it "
+                         "only let a truncated outlier pad its whole batch to "
+                         "4,096 and ask for 37 GiB of fp32 logits at once. "
+                         "3,584 clears the real maximum and caps the worst case")
     ap.add_argument("--samples", type=int, default=0,
                     help="items per epoch, drawn with the task mixture; 0 uses all")
     ap.add_argument("--mixture", default=None,

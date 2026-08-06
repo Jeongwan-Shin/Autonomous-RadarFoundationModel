@@ -28,12 +28,19 @@ from torch.utils.data import DataLoader
 
 from training.task_scorers import scorer_for, summarise
 
-ALL = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
-       "track_step_bbox", "plan_ego_xy", "plan_ego_control",
-       "agent_traj_azdeg", "agent_traj_bbox",
-       "motion_seg_azdeg", "motion_seg_bbox", "radar_transfer", "qa",
-       "desc_radar", "desc_complementarity", "desc_objects",
-       "desc_ego_maneuver", "desc_clip_summary", "radar_probe")
+_PLAIN = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
+          "track_step_bbox", "plan_ego_xy", "plan_ego_control",
+          "agent_traj_azdeg", "agent_traj_bbox",
+          "motion_seg_azdeg", "motion_seg_bbox", "qa")
+
+# The CoT variants are half the training data and the reason the tasks were
+# redefined, and this list did not mention them -- an evaluation that skips
+# them cannot say whether stating a reason first helps or hurts, which is the
+# question the build was made to answer.
+ALL = (_PLAIN + tuple(f"{t}_cot" for t in _PLAIN)
+       + ("radar_transfer", "desc_radar", "desc_complementarity",
+          "desc_objects", "desc_ego_maneuver", "desc_clip_summary",
+          "radar_probe"))
 # How long an answer each task needs. Object lists run to eight entries; the
 # tracking answers carry an id and, in the bbox form, four coordinates each, so
 # they need more room than the detection ones. A task missing from this table
@@ -47,6 +54,16 @@ MAX_NEW = {"det_objects_azdeg": 200, "det_objects_3dbbox": 240,
            "desc_radar": 120, "desc_complementarity": 120, "desc_objects": 120,
            "desc_ego_maneuver": 80, "desc_clip_summary": 160, "retrieval": 60,
            "qa": 8}
+
+# A CoT answer is the plain answer with the reason in front of it, and the
+# reason is the longer half -- measured on the built data, the supervised span
+# goes from 166 tokens to 625 for `motion_seg_bbox`. Cutting generation at the
+# plain task's budget would truncate mid-rationale, the JSON would never close,
+# and the parser would score the answer as missing. That failure reads exactly
+# like a model that cannot do the task.
+for _plain, _budget in list(MAX_NEW.items()):
+    if f"{_plain}_cot" not in MAX_NEW:
+        MAX_NEW[f"{_plain}_cot"] = _budget + 640
 
 
 def log(msg):
@@ -207,7 +224,8 @@ def run_task(task, args, loaded):
                 else:
                     continue
                 out = llm.generate(**prompt,
-                                   max_new_tokens=MAX_NEW.get(task, 48),
+                                   max_new_tokens=max(MAX_NEW.get(task, 48),
+                                                     args.max_new_floor),
                                    do_sample=False,
                                    pad_token_id=tokenizer.pad_token_id
                                    or tokenizer.eos_token_id)
@@ -303,13 +321,28 @@ def main(argv=None):
     ap.add_argument("--items", type=int, default=200)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--show", type=int, default=2)
+    ap.add_argument("--max-new-floor", type=int, default=0,
+                    help="raise every task's generation budget to at least "
+                         "this. The per-task budgets are sized for the answer "
+                         "the task asks for, so when a model answers in some "
+                         "other format they cut it off mid-sentence and the "
+                         "score reads as failure -- 83% of `det_objects_3dbbox` "
+                         "generations hit their 240-token cap. Use this to "
+                         "separate 'wrong' from 'not finished'")
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
 
     torch.cuda.set_device(0)
     loaded = load_model(args)
     results = []
-    for task in [t.strip() for t in args.tasks.split(",") if t.strip()]:
+    # `--tasks all` is what the README tells you to type, and it used to be
+    # taken literally: a task named "all" matched no items, every table came
+    # back empty, and the run still exited 0. Expand it the way the trainer
+    # does.
+    wanted = []
+    for token in [t.strip() for t in args.tasks.split(",") if t.strip()]:
+        wanted.extend(ALL if token == "all" else [token])
+    for task in dict.fromkeys(wanted):
         log(f"--- {task}")
         r = run_task(task, args, loaded)
         if r:

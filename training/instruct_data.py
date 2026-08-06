@@ -56,6 +56,7 @@ from datatools import paths
 from training.connector import radar_prompt_block
 from training.radar_encoder import SENSOR_IDS
 from training.radar_data import RadarClipDataset
+from training import frame_cache
 from training.video_frames import clip_frames, pad_frames
 
 N_FRAMES = 20
@@ -115,6 +116,22 @@ RADAR_ONLY_TASKS = frozenset({
 })
 NO_RADAR_ANSWER = "Radar unavailable, so this cannot be determined."
 
+# A batch costs what its *longest* item costs. The loss builds logits of shape
+# [batch, padded length, 151,672] and upcasts them to fp32, which is 600 kB per
+# token, and every item in the batch is padded to the longest one. One 4,096-
+# token item among sixteen therefore asks for 37 GiB in a single allocation --
+# which is what killed a run at step 1,630 after six and a half hours.
+#
+# Measured over all 33.4 M items: 01-06 top out at 2,887 characters and the
+# descriptions at 342, while `qa_cot` has a tail reaching 10,825. Fourteen items
+# exceed 4,000 characters and every one of them is `qa_cot`. Cutting there costs
+# 14 items in 33,429,895 and bounds the longest sample at about 3,480 tokens,
+# under the 3,584 the trainer now allows -- so nothing is truncated either.
+#
+# Characters rather than tokens because this runs over every item at load time
+# and tokenising 33 M strings to discard fourteen of them is not a trade.
+MAX_ITEM_CHARS = 4000
+
 SENSOR_LABEL = {"lrr1": "imaging long-range radar",
                 "mrr2": "mid-range radar",
                 "srr0": "short-range radar"}
@@ -148,7 +165,13 @@ COT_TASKS = ("agent_traj_azdeg_cot", "agent_traj_bbox_cot",
 # What `--tasks all` means. `ood_reasoning` is not in it: 2,077 events are the
 # only human-verified text in the release, and they are worth more as an
 # evaluation set nothing was fitted to.
-ALL_TRAIN_TASKS = FRAME_ITEM_TASKS + ("qa", "description", "radar_probe")
+# `all` has to reach the CoT variants too. It did not, and nothing said so: the
+# eleven `_cot` tasks are 10,848,192 items -- 32% of the training data and the
+# whole point of the redefinition, which was that every answer arrives after a
+# stated reason. A run with `--tasks all` trained on none of them and reported
+# no error, because a task nobody asks for is simply absent from the mixture.
+ALL_TRAIN_TASKS = (FRAME_ITEM_TASKS + COT_TASKS
+                   + ("qa", "description", "radar_probe"))
 
 
 def expand_tasks(spec):
@@ -205,30 +228,49 @@ def frame_reference(text):
 # is held to the same weight as any single description kind rather than being
 # allowed to dominate. `radar` and `complementarity` are doubled because they are
 # the only text that puts a loss on the radar pathway at all.
+# Five of these keys named tasks that no longer exist -- `agent_traj_cot` and
+# `motion_seg_cot` were renamed when each task split into an azdeg and a bbox
+# form, so the two kinds the weights were meant to double got the default 1.0
+# instead. A key that matches nothing is silent: the mixture still sums, still
+# samples, and simply weights something else.
+#
+# Each `_cot` variant now carries its plain twin's weight. They are the same
+# question with the reason spoken aloud, so weighting them apart would be a
+# claim about which of the two the model should prefer, and there is no
+# measurement behind such a claim.
 DEFAULT_MIXTURE = {
     # radar-dependent: the only items whose answer changes when the radar does
     "radar_probe": 2.0,
-    "radar_probe_coarse": 2.0,
-    "agent_traj_cot": 2.0,
-    "motion_seg_cot": 2.0,
-    "radar_transfer": 2.0,
     "motion_seg_azdeg": 2.0,
     "motion_seg_bbox": 2.0,
+    "motion_seg_azdeg_cot": 2.0,
+    "motion_seg_bbox_cot": 2.0,
     "desc_radar": 2.0,
     "desc_complementarity": 2.0,
     # camera- and ego-grounded
     "qa": 2.0,
+    "qa_cot": 2.0,
     "det_objects_azdeg": 1.5,
     "det_objects_3dbbox": 1.5,
+    "det_objects_azdeg_cot": 1.5,
+    "det_objects_3dbbox_cot": 1.5,
     "plan_ego_xy": 1.5,
     "plan_ego_control": 1.5,
+    "plan_ego_xy_cot": 1.5,
+    "plan_ego_control_cot": 1.5,
     "agent_traj_azdeg": 1.5,
     "agent_traj_bbox": 1.5,
+    "agent_traj_azdeg_cot": 1.5,
+    "agent_traj_bbox_cot": 1.5,
     "track_step_azdeg": 1.0,
     "track_step_bbox": 1.0,
+    "track_step_azdeg_cot": 1.0,
+    "track_step_bbox_cot": 1.0,
     "desc_objects": 1.0,
     "desc_ego_maneuver": 1.0,
     "desc_clip_summary": 1.0,
+    # Evaluation-only, and kept so an explicit `--tasks` can still weight them.
+    "radar_transfer": 2.0,
     "ood_reasoning": 1.0,
 }
 
@@ -684,7 +726,8 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
                     "frame": int(np.clip(row.event_start_frame // 30, 0, N_FRAMES - 1)),
                     "verified": True,
                 })
-    return items
+    return [i for i in items
+            if len(i["prompt"]) + len(i["target"]) <= MAX_ITEM_CHARS]
 
 
 class InstructDataset(Dataset):
@@ -796,13 +839,25 @@ class InstructDataset(Dataset):
                                                rate_hz=radar_hz)
         else:
             radar = self.radar_ds[name][position]
-        frames = pad_frames(clip_frames(self.nvidia_root, self.clips.loc[clip_id]),
-                            self.n_frames)
+        # Work out which frames this item needs before decoding anything. The
+        # old order decoded all twenty and then sliced, so a `det_objects` item
+        # that uses one frame paid for twenty. With the cache the wanted indices
+        # are read individually and the rest are never touched.
+        last = self.n_frames - 1
         if instant:
-            frames = [frames[min(int(item["frame"]), len(frames) - 1)]]
+            wanted = [min(int(item["frame"]), last)]
         elif window:
-            end = min(int(item["frame"]), len(frames) - 1)
-            frames = frames[max(0, end - n_frames + 1):end + 1]
+            end = min(int(item["frame"]), last)
+            wanted = list(range(max(0, end - n_frames + 1), end + 1))
+        else:
+            wanted = list(range(self.n_frames))
+        frames = frame_cache.load(clip_id, wanted)
+        if frames is None:
+            # No cache for this clip -- decode the mp4 and slice as before.
+            decoded = pad_frames(clip_frames(self.nvidia_root,
+                                             self.clips.loc[clip_id]),
+                                 self.n_frames)
+            frames = [decoded[i] for i in wanted]
 
         points, mask = radar["points"], radar["mask"]
         present = self.radar_of.get(clip_id)
@@ -853,7 +908,7 @@ class InstructDataset(Dataset):
                                        else SENSOR_IDS["none"])}
 
 
-def build_collate(processor, tokenizer, max_length=4096):
+def build_collate(processor, tokenizer, max_length=3584):
     """Chat-template the batch and mask the loss to the answer span."""
 
     def collate(batch):

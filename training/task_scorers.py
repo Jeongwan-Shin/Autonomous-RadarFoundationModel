@@ -791,3 +791,41 @@ def idf1(sequence):
 for _form in ("azdeg", "bbox"):
     SCORERS[f"track_step_{_form}"] = score_tracking
     REWARDS[f"track_step_{_form}"] = reward_tracking
+
+
+def cot_scorer(plain):
+    """Score a CoT generation on its answer, with the reason kept alongside.
+
+    Without this every `_cot` task fell through to `score_text`, which compares
+    strings -- so the eleven tasks the redefinition exists for were graded on
+    character overlap with a JSON blob, and a model that reasoned perfectly and
+    a model that copied the prompt would land near the same number.
+
+    The answer is what the plain twin's scorer already knows how to grade. What
+    is added is whether the format held at all, since a rationale the parser
+    cannot find is a rationale the reward cannot see either.
+    """
+    def score(generated, reference, prompt=None):
+        _, got = split_rationale(generated)
+        _, want = split_rationale(reference)
+        try:
+            out = plain(got, want, prompt)
+        except TypeError:
+            out = plain(got, want)
+        out = dict(out)
+        out["cot_parsed"] = float(RATIONALE_JSON.search(generated or "")
+                                  is not None)
+        out["n"] = out.get("n", 1)
+        return out
+    score.__name__ = f"cot_{getattr(plain, '__name__', 'score')}"
+    return score
+
+
+# Every `_cot` task borrows its plain twin's scorer. `qa_cot` is included: its
+# answer is still a single letter, and the letter is what the choice scorer
+# grades.
+for _plain in ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
+               "track_step_bbox", "plan_ego_xy", "plan_ego_control",
+               "agent_traj_azdeg", "agent_traj_bbox", "motion_seg_azdeg",
+               "motion_seg_bbox", "qa"):
+    SCORERS[f"{_plain}_cot"] = cot_scorer(SCORERS[_plain])
