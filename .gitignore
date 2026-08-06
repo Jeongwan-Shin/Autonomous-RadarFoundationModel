@@ -17,9 +17,11 @@ runs/
 *.zip
 checkpoints/
 
-# Notebooks are committed without outputs; the executed copies are a
-# local verification artefact, not source.
-*_executed.ipynb
+# The executed copies are committed too. They were treated as a local
+# verification artefact, but the outputs are the point for a reader without the
+# data: the executed notebook is the only place the frames, the radar scatter
+# and the per-task counts are visible without a machine that holds the 3.45 GB
+# parquet. All six together are 1.1 MB.
 
 __pycache__/
 *.py[cod]
