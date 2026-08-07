@@ -156,6 +156,33 @@ def digit_distance_loss(logits, labels, digit_ids):
     return torch.nn.functional.smooth_l1_loss(expected, truth.float())
 
 
+def number_distance_loss(logits, labels, number_ids, number_values):
+    """The same idea once a number is one token: penalise the distance in value.
+
+    `digit_distance_loss` works on the ten digit tokens and therefore grades
+    each decimal place separately -- writing 900 for 100 is punished as one
+    wrong hundreds digit, exactly as writing 200 would be. With a token per
+    literal the model chooses among values directly, so the expectation is over
+    the values themselves and the error is what a metre or a degree actually
+    costs.
+
+    Scaled by the spread of the true values in the batch, so a task answering in
+    hundreds of pixels does not swamp one answering in metres.
+    """
+    positions = torch.isin(labels, number_ids)
+    if not positions.any():
+        return logits.sum() * 0.0
+    lookup = torch.full((int(number_ids.max()) + 1,), float("nan"),
+                        device=logits.device)
+    lookup[number_ids] = number_values
+    truth = lookup[labels[positions]]
+    selected = logits[positions][:, number_ids]
+    expected = (torch.softmax(selected.float(), dim=-1)
+                * number_values.unsqueeze(0)).sum(-1)
+    scale = truth.abs().mean().clamp(min=1.0)
+    return torch.nn.functional.smooth_l1_loss(expected / scale, truth / scale)
+
+
 def setup():
     if int(os.environ.get("WORLD_SIZE", 1)) > 1:
         dist.init_process_group("nccl")
@@ -201,8 +228,15 @@ def build(args, rank):
         attn_implementation="sdpa").to(torch.cuda.current_device())
 
     pad_id = add_radar_tokens(tokenizer, llm)
+    # One token per numeric literal, initialised so that nearby values start out
+    # nearby. Answers are 44-88% digits, and a token per digit both costs the
+    # context and grades each decimal place separately -- 900 for 100 reads as
+    # one wrong hundreds digit, the same as 200.
+    from training.number_tokens import add_number_tokens
+    n_num = add_number_tokens(tokenizer, llm)
     processor.tokenizer = tokenizer
-    log(rank, f"radar pad token id {pad_id}, vocab now {len(tokenizer)}")
+    log(rank, f"radar pad token id {pad_id}, +{n_num:,} number tokens, "
+              f"vocab now {len(tokenizer)}")
 
     # The encoder's own recorded geometry wins over the flags: the number of
     # tokens it emits is what the prompt has to reserve placeholders for, and a
@@ -475,8 +509,21 @@ def main(argv=None):
                               all_profiles=args.all_profiles,
                               radar_dropout=args.radar_dropout, seed=args.seed)
     log(rank, f"dataset {len(dataset):,} items")
-    for task, count in sorted(dataset.task_counts().items()):
+    counts = dict(sorted(dataset.task_counts().items()))
+    for task, count in counts.items():
         log(rank, f"  {task:24s} {count:7,}  ({count/len(dataset)*100:5.1f}%)")
+
+    from training import tracking
+    tracking.start(
+        tracking.run_name("sft", args),
+        {**vars(args), "world_size": world, "micro": micro, "accum": accum,
+         "global_batch": micro * accum * world, "items": len(dataset),
+         "vocab": len(tokenizer),
+         "trainable_params": sum(p.numel() for p in trainable),
+         "tasks": len(counts),
+         **{f"mix/{k}": v / len(dataset) for k, v in counts.items()}},
+        rank=rank, job="train",
+        tags=(args.stage, args.model, "numtok" if args.digit_weight else "plain"))
     sampler = DistributedSampler(dataset) if world > 1 else None
     loader = DataLoader(dataset, batch_size=micro, sampler=sampler,
                         shuffle=sampler is None, num_workers=args.workers,
@@ -485,6 +532,16 @@ def main(argv=None):
                         drop_last=True, pin_memory=True)
 
     digit_ids = torch.tensor(DIGIT_TOKEN_IDS, device=device)
+    from training.number_tokens import number_tokens as _num_literals
+    _lits = _num_literals()
+    number_ids = number_values = None
+    if _lits:
+        _ids = tokenizer.convert_tokens_to_ids(_lits)
+        keep = [(i, l) for i, l in zip(_ids, _lits) if i is not None and i >= 0]
+        number_ids = torch.tensor([i for i, _ in keep], device=device)
+        number_values = torch.tensor([float(l) for _, l in keep],
+                                     device=device, dtype=torch.float32)
+        log(rank, f"number-distance loss over {len(keep):,} literals")
     injector = RadarInjector(llm.get_input_embeddings(), pad_id)
     # `full` shards these with FSDP2 instead, inside configure_stage.
     if world > 1 and args.stage != "full":
@@ -567,8 +624,12 @@ def main(argv=None):
             numeric = None
             if args.digit_weight > 0:
                 # Labels are shifted by one against logits, as in any causal LM.
-                numeric = digit_distance_loss(out.logits[:, :-1],
-                                              batch["labels"][:, 1:], digit_ids)
+                numeric = (number_distance_loss(out.logits[:, :-1],
+                                                batch["labels"][:, 1:],
+                                                number_ids, number_values)
+                           if number_ids is not None else
+                           digit_distance_loss(out.logits[:, :-1],
+                                               batch["labels"][:, 1:], digit_ids))
                 loss = loss + args.digit_weight * numeric
             grounding = None
             if args.radar_contrast > 0 and batch["input_ids"].shape[0] > 1:
@@ -610,6 +671,15 @@ def main(argv=None):
                     log(rank, f"step {step}/{total_steps}  loss {loss.item()*accum:.4f}"
                               f"{extra}  {rate:.1f} sample/s  peak {peak:.1f} GiB")
                     history.append({"step": step, "loss": loss.item() * accum})
+                    tracking.log({
+                        "train/loss": loss.item() * accum,
+                        "train/number_distance": None if numeric is None else numeric.item(),
+                        "train/radar_hinge": None if grounding is None else grounding.item(),
+                        "train/lr": schedule.get_last_lr()[0],
+                        "perf/sample_per_s": rate,
+                        "perf/peak_gib": peak,
+                        "perf/samples_seen": seen,
+                    }, step=step)
                 # A run of a few thousand steps is hours long; without this a
                 # crash at the end loses all of it.
                 if args.save_every and step % args.save_every == 0:
@@ -621,6 +691,12 @@ def main(argv=None):
 
     save()
     injector.remove()
+    tracking.summary({"final/step": step,
+                      "final/loss": history[-1]["loss"] if history else None,
+                      "final/samples": step * micro * world * accum,
+                      "final/hours": (time.monotonic() - started) / 3600.0,
+                      "final/out": out_dir})
+    tracking.finish()
     if world > 1:
         dist.destroy_process_group()
     return 0

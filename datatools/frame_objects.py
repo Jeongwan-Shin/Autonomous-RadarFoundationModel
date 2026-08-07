@@ -119,6 +119,28 @@ RADAR_EVIDENCE_TASKS = ("depth_range", "motion_seg", "motion_seg_cot",
                         "agent_traj_cot", "det_objects_azdeg_cot",
                         "det_objects_3dbbox_cot", "depth_range_cot")
 
+# What tells a CoT item apart from its plain twin. Every `_cot` task used to
+# carry its plain twin's prompt verbatim -- measured over 3,000 pairs per task,
+# 100% identical -- so the same input had two different right answers and no
+# way to tell which was wanted. The model resolved it by picking one: evaluated
+# at 4,400 steps it answered `plan_ego` and `agent_traj` in CoT format 100% of
+# the time and `det_objects` 93%, scoring near zero on the plain tasks for a
+# reason that has nothing to do with what it can see.
+#
+# `qa` was the exception and the control. Its two forms did differ -- "Answer
+# with the letter" against "Reason step by step, then answer with the letter" --
+# and it is the one task that split cleanly, 0% against 100%.
+#
+# Appended rather than prepended so the plain instruction keeps its own opening
+# word, and defined once here because five separate name lists drifting apart
+# is exactly what produced the defect above.
+COT_INSTRUCTION = " Reason step by step first, then give the answer."
+
+
+def cot_prompt(question):
+    return question.rstrip() + COT_INSTRUCTION
+
+
 SENSOR_NAME = {"srr0": "radar_front_center_srr_0",
                "mrr2": "radar_front_center_mrr_2",
                "lrr1": "radar_front_center_imaging_lrr_1"}
@@ -326,18 +348,45 @@ def ego_waypoints(derived, t_s):
 # serialisation
 # --------------------------------------------------------------------------
 
-def describe_object_xyz(row, hits=None, with_motion=True):
-    """The same object in rig coordinates: x forward, y left, z up.
+def box_yaw(row):
+    """Heading in the rig frame, degrees, positive to the left of the ego.
 
-    The polar form loses precision with distance -- one degree of azimuth is
-    0.6 m at 34 m and 1.7 m at 100 m -- and the matcher converts back to
-    Cartesian to score anyway, so this format skips a conversion rather than
-    adding one. `z` is included because height separates a vehicle on an
-    overpass from one on the road beneath it, which range and bearing alone
-    cannot.
+    The label carries a quaternion, which is four numbers of which three sit
+    near zero for a vehicle on level ground, and which has a sign ambiguity --
+    q and -q are the same rotation, so a model would be asked to reproduce a
+    choice nobody makes consistently. One yaw angle carries what the box needs
+    and is scored by an angular difference that knows 179 and -179 are close.
     """
+    quat = [row.orientation_x, row.orientation_y,
+            row.orientation_z, row.orientation_w]
+    heading = Rotation.from_quat(quat).apply([1.0, 0.0, 0.0])
+    return float(np.degrees(np.arctan2(heading[1], heading[0])))
+
+
+def describe_object_xyz(row, hits=None, with_motion=True):
+    """A 3D box in rig coordinates: centre, extent and heading.
+
+    x forward, y left, z up. The polar form loses precision with distance --
+    one degree of azimuth is 0.6 m at 34 m and 1.7 m at 100 m -- and the
+    matcher converts back to Cartesian to score anyway, so this format skips a
+    conversion rather than adding one. `z` is included because height separates
+    a vehicle on an overpass from one on the road beneath it, which range and
+    bearing alone cannot.
+
+    Extent and heading are here because without them this was a point, not a
+    box, whatever the task was called. A centre says where something is; a
+    driving stack also needs how much room it takes and which way it faces,
+    and both are in the labels already -- `size_*` and `orientation_*` -- so
+    emitting only the centre was throwing away supervision that cost nothing.
+    """
+    # `size` and `deg` are named rather than left to the instruction. Three
+    # bare numbers after a coordinate triple do not say which is length and
+    # which is height, and the rest of these answers label every quantity --
+    # "34 m az +13 deg". Three extra tokens per object buys an answer that
+    # reads correctly on its own.
     text = (f"{row.label_class} ({row.center_x:.1f}, {row.center_y:.1f}, "
-            f"{row.center_z:.1f})")
+            f"{row.center_z:.1f}) size {row.size_x:.1f}x{row.size_y:.1f}x"
+            f"{row.size_z:.1f} m yaw {box_yaw(row):+.0f} deg")
     if with_motion:
         text += " moving" if row.moved else " stationary"
     if hits is not None:
@@ -458,9 +507,11 @@ def clip_items(clip_id, row, nvidia_root):
                                for r in listed.itertuples())
         emit("det_objects_azdeg", frame, question, answer)
 
-        question_xyz = ("List every road user in the forward sector with its "
-                        "class and 3D position as (x, y, z) in metres, x "
-                        "forward, y left, z up.")
+        question_xyz = ("List every road user in the forward sector as a 3D "
+                        "box: class, centre (x, y, z) in metres with x "
+                        "forward, y left and z up, then size as "
+                        "length x width x height in metres, then yaw in "
+                        "degrees, positive to the left of the ego heading.")
         if listed is None:
             answer_xyz = "No road users in the forward sector."
         else:
@@ -503,9 +554,9 @@ def clip_items(clip_id, row, nvidia_root):
                 rationale = ("; ".join(clauses) + ". Range comes from the radar "
                              "where it has a return and from the camera alone "
                              "where it does not.")
-                emit("det_objects_azdeg_cot", frame, question,
+                emit("det_objects_azdeg_cot", frame, cot_prompt(question),
                      json.dumps({"rationale": rationale, "answer": answer}))
-                emit("det_objects_3dbbox_cot", frame, question_xyz,
+                emit("det_objects_3dbbox_cot", frame, cot_prompt(question_xyz),
                      json.dumps({"rationale": rationale, "answer": answer_xyz}))
 
     for frame in ANCHOR_FRAMES:
@@ -620,7 +671,7 @@ def clip_items(clip_id, row, nvidia_root):
                         f"Identify each {how}.")
             answer = f"moving: {a}. stationary: {b_}."
             emit(f"motion_seg_{form}", seconds + 1, question, answer)
-            emit(f"motion_seg_{form}_cot", seconds + 1, question,
+            emit(f"motion_seg_{form}_cot", seconds + 1, cot_prompt(question),
                  json.dumps({"rationale": rationale, "answer": answer}))
 
     # 03.1 -- the ego's own path, on its own anchors, in two representations
@@ -655,7 +706,7 @@ def clip_items(clip_id, row, nvidia_root):
         }
         for form, (question, answer) in forms.items():
             emit(f"plan_ego_{form}", seconds + 1, question, answer)
-            emit(f"plan_ego_{form}_cot", seconds + 1, question,
+            emit(f"plan_ego_{form}_cot", seconds + 1, cot_prompt(question),
                  json.dumps({"rationale": rationale, "answer": answer}))
 
     # 03.2 -- one other object, forward in time. Two representations again:
@@ -769,7 +820,7 @@ def clip_items(clip_id, row, nvidia_root):
                         f"the next 3 seconds? Answer {how}, or say "
                         f"'{LEAVES}' for a horizon it does not reach.")
             emit(f"agent_traj_{form}", seconds + 1, question, answer)
-            emit(f"agent_traj_{form}_cot", seconds + 1, question,
+            emit(f"agent_traj_{form}_cot", seconds + 1, cot_prompt(question),
                  json.dumps({"rationale": rationale, "answer": answer}))
 
     # 02 -- tracking, posed as tracking: a history goes in, one instant comes
@@ -803,7 +854,7 @@ def clip_items(clip_id, row, nvidia_root):
                       f"giving a new id to anything not seen before.")
             emit(f"track_step_{form}", seconds + 1, prompt, step_text(now, form))
             if camera is not None:
-                emit(f"track_step_{form}_cot", seconds + 1, prompt,
+                emit(f"track_step_{form}_cot", seconds + 1, cot_prompt(prompt),
                      json.dumps({"rationale": step_reason(now, past[-1][1], form),
                                  "answer": step_text(now, form)}))
 

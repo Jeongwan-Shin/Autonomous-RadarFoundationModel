@@ -23,6 +23,9 @@ checkpoints/
 # and the per-task counts are visible without a machine that holds the 3.45 GB
 # parquet. All six together are 1.1 MB.
 
+# Local mirror of what was sent to the dashboard.
+wandb/
+
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/

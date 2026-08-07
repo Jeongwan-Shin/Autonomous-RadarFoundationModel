@@ -342,15 +342,38 @@ def main(argv=None):
     wanted = []
     for token in [t.strip() for t in args.tasks.split(",") if t.strip()]:
         wanted.extend(ALL if token == "all" else [token])
+    from training import tracking
+    tracking.start(f"eval-{os.path.basename(args.checkpoint.rstrip('/'))}"
+                   f"-{args.split}-{args.items}",
+                   {**vars(args), "n_tasks": len(set(wanted))},
+                   job="eval", tags=("eval", args.split))
     for task in dict.fromkeys(wanted):
         log(f"--- {task}")
         r = run_task(task, args, loaded)
         if r:
             results.append(r)
+            # One row per task per mode, so the radar control sits beside the
+            # score it is a control for rather than in a separate chart.
+            for mode in ("full", "shuffled"):
+                s = r.get(mode) or {}
+                tracking.log({f"{mode}/{task}/{k}": v for k, v in s.items()
+                              if isinstance(v, (int, float))})
             for got, want in r["examples"]:
                 print(f"      got  : {got}")
                 print(f"      truth: {want}")
     report(results)
+    # The table is the part worth opening: a score without the text it came
+    # from cannot tell a wrong answer from an unparsed one.
+    rows = []
+    for r in results:
+        for got, want in r.get("examples", []):
+            rows.append([r["task"], got, want])
+    tracking.table("samples", ("task", "generated", "reference"), rows)
+    tracking.summary({f"score/{r['task']}/{k}": v
+                      for r in results
+                      for k, v in (r.get("full") or {}).items()
+                      if isinstance(v, (int, float))})
+    tracking.finish()
     if args.out:
         # Generations go beside the summary, not inside it: they are ~200x
         # larger and a summary should stay readable. One JSON object per line,

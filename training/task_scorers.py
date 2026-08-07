@@ -47,11 +47,18 @@ RANGE_ONLY_THRESHOLD_M = 1.0
 # matcher works in Cartesian space either way: a polar answer is converted, so a
 # Cartesian one simply skips a conversion whose rounding error grows with range
 # (one degree of azimuth is 0.6 m at 34 m and 1.7 m at 100 m).
+# "automobile (9.7, -13.0, 0.9) 4.5x1.9x1.5 yaw +12" -- a 3D box. The extent
+# and the heading are optional in the pattern so an answer that gives only a
+# centre still parses: a model that has not learnt to emit them should be
+# scored on what it did emit, not dropped as unreadable.
 OBJECT_XYZ = re.compile(
     r"(?:#(?P<tid>\d+)\s+)?(?P<cls>[a-z_]+)\s*\(\s*"
     r"(?P<x>[+-]?\d+(?:\.\d+)?)\s*,\s*"
     r"(?P<y>[+-]?\d+(?:\.\d+)?)\s*,\s*"
     r"(?P<z>[+-]?\d+(?:\.\d+)?)\s*\)"
+    r"(?:\s+(?:size\s+)?(?P<l>\d+(?:\.\d+)?)\s*x\s*(?P<w>\d+(?:\.\d+)?)"
+    r"\s*x\s*(?P<h>\d+(?:\.\d+)?)(?:\s*m)?)?"
+    r"(?:\s+yaw\s+(?P<yaw>[+-]?\d+(?:\.\d+)?)(?:\s*deg)?)?"
     r"(?P<motion>\s+moving|\s+stationary)?")
 
 
@@ -107,10 +114,15 @@ def parse_objects(text):
                         "has_az": False, "moving": moving})
         elif kind == "xyz":
             x, y = float(m.group("x")), float(m.group("y"))
+            g = m.groupdict()
+            size = ([float(g[k]) for k in ("l", "w", "h")]
+                    if g.get("l") is not None else None)
+            yaw = float(g["yaw"]) if g.get("yaw") is not None else None
             out.append({"tid": tid, "cls": m.group("cls"), "x": x, "y": y,
                         "z": float(m.group("z")), "rng": math.hypot(x, y),
                         "az": math.degrees(math.atan2(y, x)), "has_az": True,
-                        "bbox": None, "moving": moving})
+                        "bbox": None, "moving": moving,
+                        "size": size, "yaw": yaw})
         else:
             az = m.group("az")
             out.append({"tid": tid, "cls": m.group("cls"),
@@ -181,10 +193,22 @@ def score_objects(generated, reference):
            "fn": len(truth) - len(pairs), "matched": len(pairs),
            "class_ok": 0, "motion_ok": 0, "id_ok": 0, "id_total": 0,
            "range_err": 0.0, "az_err": 0.0, "az_n": 0,
-           "z_err": 0.0, "z_n": 0}
+           "z_err": 0.0, "z_n": 0,
+           "size_err": 0.0, "size_n": 0, "yaw_err": 0.0, "yaw_n": 0}
     for p, t in pairs:
         out["class_ok"] += p["cls"] == t["cls"]
         out["motion_ok"] += p["moving"] == t["moving"]
+        if p.get("size") and t.get("size"):
+            # Mean absolute error over length, width and height, so one number
+            # is comparable across objects of very different size.
+            out["size_err"] += sum(abs(a - b) for a, b
+                                   in zip(p["size"], t["size"])) / 3.0
+            out["size_n"] += 1
+        if p.get("yaw") is not None and t.get("yaw") is not None:
+            # Wrapped: +179 and -179 are two degrees apart, not 358.
+            d = abs(p["yaw"] - t["yaw"]) % 360.0
+            out["yaw_err"] += min(d, 360.0 - d)
+            out["yaw_n"] += 1
         if p.get("rng") is not None and t.get("rng") is not None:
             out["range_err"] += abs(p["rng"] - t["rng"])
         if p.get("z") is not None and t.get("z") is not None:
@@ -327,7 +351,12 @@ def scorer_for(task):
     return SCORERS.get(task, score_text)
 
 
-def summarise(task, records, correlation=None):
+def summarise_with(fn, records, correlation=None):
+    """`summarise` keyed on the scorer rather than the task name."""
+    return summarise("", records, correlation, _fn=fn)
+
+
+def summarise(task, records, correlation=None, _fn=None):
     """Fold per-item dicts into the numbers worth printing."""
     if not records:
         return {}
@@ -337,7 +366,13 @@ def summarise(task, records, correlation=None):
             if isinstance(v, (int, float)):
                 total[k] = total.get(k, 0) + v
     n = total.get("n", len(records))
-    fn = scorer_for(task)
+    fn = _fn or scorer_for(task)
+    if hasattr(fn, "plain"):
+        out = summarise_with(fn.plain, records, correlation)
+        out["metric"] = "cot " + out["metric"]
+        if total.get("cot_parsed") is not None:
+            out["cot_parsed"] = total["cot_parsed"] / n
+        return out
 
     if fn is score_objects:
         tp, fp, miss = total["tp"], total["fp"], total["fn"]
@@ -352,6 +387,10 @@ def summarise(task, records, correlation=None):
                 "range_mae": total["range_err"] / matched,
                 "az_mae": total["az_err"] / max(total["az_n"], 1),
                 "matched": total["matched"],
+                "size_mae": (total["size_err"] / total["size_n"]
+                             if total.get("size_n") else None),
+                "yaw_mae": (total["yaw_err"] / total["yaw_n"]
+                            if total.get("yaw_n") else None),
                 "id_acc": (total["id_ok"] / total["id_total"]
                            if total["id_total"] else None)}
     if fn is score_waypoints:
@@ -379,6 +418,28 @@ def summarise(task, records, correlation=None):
                 "f1": 2 * precision * recall / max(precision + recall, 1e-9)}
     if fn is score_choice:
         return {"metric": "choice", "n": n, "accuracy": total["correct"] / n}
+    # `score_tracking` and `score_control` were never given a branch here, so
+    # six tasks -- the four tracking forms and both plan_ego control forms --
+    # reported "text (loss only)" and produced no number at all. They were
+    # generated, scored per item and then thrown away at the fold.
+    if fn is score_tracking:
+        tp, fp, miss = total["tp"], total["fp"], total["fn"]
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + miss, 1)
+        matched = max(total["matched"], 1)
+        return {"metric": "tracking", "n": n,
+                "precision": precision, "recall": recall,
+                "f1": 2 * precision * recall / max(precision + recall, 1e-9),
+                "class_acc": total["class_ok"] / matched,
+                "id_carried": (total["id_carried"] / total["id_checkable"]
+                               if total["id_checkable"] else None),
+                "id_checkable": total["id_checkable"]}
+    if fn is score_control:
+        h = max(total["horizons"], 1)
+        return {"metric": "control", "n": n,
+                "speed_mae_ms": total["speed_err"] / h,
+                "yaw_mae_degs": total["yaw_err"] / h,
+                "coverage": total["horizons"] / max(total["expected"], 1)}
     return {"metric": "text (loss only)", "n": n}
 
 
@@ -818,6 +879,10 @@ def cot_scorer(plain):
         out["n"] = out.get("n", 1)
         return out
     score.__name__ = f"cot_{getattr(plain, '__name__', 'score')}"
+    # `summarise` picks its branch with `fn is score_objects`, which a closure
+    # can never satisfy. Carrying the wrapped scorer lets it unwrap and fold
+    # the numbers the same way the plain task's are folded.
+    score.plain = plain
     return score
 
 

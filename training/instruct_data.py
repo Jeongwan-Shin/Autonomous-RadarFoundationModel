@@ -53,6 +53,7 @@ from torch.utils.data import Dataset
 from transformers.video_utils import VideoMetadata
 
 from datatools import paths
+from datatools.frame_objects import COT_INSTRUCTION
 from training.connector import radar_prompt_block
 from training.radar_encoder import SENSOR_IDS
 from training.radar_data import RadarClipDataset
@@ -203,12 +204,22 @@ def quantise(value, key):
     return int(np.clip(np.digitize(value, EGO_EDGES[key]) - 1, 0, EGO_BINS - 1))
 
 
-def ego_text(ego_state, up_to_frame):
-    """Ego motion as bin indices, truncated at `up_to_frame` inclusive."""
+def ego_text(ego_state, up_to_frame, times=None):
+    """Ego motion as bin indices, truncated at `up_to_frame` inclusive.
+
+    `times`, when given, labels each reading with its own offset in seconds
+    instead of a bare index. `t0..t19` meant one second apart in a clip-level
+    task and a tenth of a second in a two-second window -- the same notation
+    for two different things, and the header was the only place that said
+    which. Reading it as twenty seconds of context is the natural mistake, and
+    for `plan_ego`, whose answer is the ego's own future, that mistake looks
+    exactly like a leak.
+    """
     rows = []
     for f in range(min(up_to_frame + 1, len(ego_state))):
         speed, accel, yaw = ego_state[f].tolist()
-        rows.append(f"t{f}:s{quantise(speed,'speed')}"
+        label = f"t{f}" if times is None else f"{times[f]:+.0f}s"
+        rows.append(f"{label}:s{quantise(speed,'speed')}"
                     f"a{quantise(accel,'accel')}y{quantise(yaw,'yaw')}")
     return " ".join(rows)
 
@@ -452,7 +463,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
                     items.append({
                         "clip_id": doc["clip_id"], "task": "qa_cot",
                         "prompt": f"{item['question']}\n{options}\n"
-                                  "Reason step by step, then answer with the letter.",
+                                  "Answer with the letter." + COT_INSTRUCTION,
                         "target": json.dumps({"rationale": item["rationale"],
                                               "answer": item["answer"]}),
                         "frame": frame_reference(item["question"]),
@@ -887,13 +898,26 @@ class InstructDataset(Dataset):
             ego = ego_text(radar["ego_state"][-1:], 0)
             ego_header = f"Ego motion (binned, at t={item['frame']}s)"
         elif window:
-            ego = ego_text(radar["ego_state"], len(radar["ego_state"]))
-            ego_header = (f"Ego motion (binned, {seconds} s at "
-                          f"{radar_hz} Hz, ending at t={item['frame']}s)")
+            # One reading per second, not one per radar scan. The radar grid is
+            # 10 Hz for a two-second window, and twenty ego readings a tenth of
+            # a second apart say the same thing twenty times: measured across a
+            # one-second window the spread is 0.06-0.12 m/s against 4.3 m/s
+            # across a clip. Subsampling to 1 Hz keeps the trend the prediction
+            # actually needs and drops about 170 tokens.
+            state = radar["ego_state"]
+            step = max(1, int(round(radar_hz)))
+            keep = list(range(len(state) - 1, -1, -step))[::-1]
+            offsets = [(i - (len(state) - 1)) / float(radar_hz) for i in keep]
+            ego = ego_text(state[keep], len(keep) - 1, times=offsets)
+            ego_header = (f"Ego motion (binned, 1 Hz, offsets in seconds from "
+                          f"t={item['frame']}s)")
         else:
             # Ego motion stops at the frame in question; see the module docstring.
-            ego = ego_text(radar["ego_state"], item["frame"])
-            ego_header = f"Ego motion (binned, t0..t{item['frame']})"
+            ego = ego_text(radar["ego_state"], item["frame"],
+                           times=[i - item["frame"]
+                                  for i in range(item["frame"] + 1)])
+            ego_header = ("Ego motion (binned, 1 Hz, offsets in seconds from "
+                          f"t={item['frame']}s)")
 
         user = (f"{radar_prompt_block(self.radar_tokens)}\n"
                 f"Sensors present: {sensors}.\n"
