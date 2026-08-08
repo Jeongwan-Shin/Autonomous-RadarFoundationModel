@@ -33,3 +33,10 @@ __pycache__/
 .DS_Store
 *.orig
 *.swp
+
+# 독립 평가 번들: 코드와 설정만 트리에 두고, 큰 것 둘은 드라이브에서 받는다.
+# data/ 는 1.4 GB 이고 체크포인트는 17 GB 라 저장소에 들어갈 크기가 아니다.
+20260808_test/data/
+20260808_test/results/
+20260808_test/vlm_8B_*/
+20260808_test/*.tar.gz
