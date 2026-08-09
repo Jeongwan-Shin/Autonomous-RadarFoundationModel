@@ -273,14 +273,37 @@ def _horizons(text):
 
 
 def score_trajectory(generated, reference):
-    got = {int(h): (float(r), float(a)) for h, r, a in HORIZON.findall(generated or "")}
-    want = {int(h): (float(r), float(a)) for h, r, a in HORIZON.findall(reference or "")}
+    """Where the named object goes, in whichever form the instruction asked for.
+
+    This read only the polar form, so `agent_traj_bbox` -- whose answer is
+    "+1s [478, 674, 487, 686]" -- matched nothing and reported coverage 0.00 on
+    every item. That reads as a model producing no answer; it was producing
+    boxes within ten pixels of the truth. `_horizons` already handled all three
+    forms, including "leaves the forward sector"; this simply never called it.
+
+    Boxes are scored by IoU rather than metres, and an exit is right only when
+    the reference also exits -- claiming an object left when it stayed is a
+    miss, not a free pass.
+    """
+    got, want = _horizons(generated), _horizons(reference)
     shared = sorted(set(got) & set(want))
-    out = {"n": 1, "horizons": len(shared), "expected": len(want),
-           "range_err": 0.0, "az_err": 0.0}
+    out = {"n": 1, "horizons": 0, "expected": len(want),
+           "range_err": 0.0, "az_err": 0.0, "iou": 0.0, "iou_n": 0,
+           "gone_ok": 0, "gone_n": 0}
     for h in shared:
-        out["range_err"] += abs(got[h][0] - want[h][0])
-        out["az_err"] += abs(got[h][1] - want[h][1])
+        a, b = got[h], want[h]
+        if b[0] == "gone":
+            out["gone_n"] += 1
+            out["gone_ok"] += a[0] == "gone"
+            out["horizons"] += 1
+        elif a[0] == b[0] == "polar":
+            out["horizons"] += 1
+            out["range_err"] += abs(a[1] - b[1])
+            out["az_err"] += abs(a[2] - b[2])
+        elif a[0] == b[0] == "bbox":
+            out["horizons"] += 1
+            out["iou"] += _iou(a[1], b[1])
+            out["iou_n"] += 1
     return out
 
 
@@ -402,6 +425,10 @@ def summarise(task, records, correlation=None, _fn=None):
         return {"metric": "trajectory", "n": n,
                 "range_mae_m": total["range_err"] / h,
                 "az_mae_deg": total["az_err"] / h,
+                "iou": (total["iou"] / total["iou_n"]
+                        if total.get("iou_n") else None),
+                "gone_acc": (total["gone_ok"] / total["gone_n"]
+                             if total.get("gone_n") else None),
                 "coverage": total["horizons"] / max(total["expected"], 1)}
     if fn is score_quantity:
         scored = max(total["scored"], 1)

@@ -11,14 +11,14 @@
 
 | 파일 | 크기 | 무엇 |
 |---|---|---|
-| `model_8b_v4_step2400.tar.gz` | 14 GB | 학습된 체크포인트 (step 2,400) |
+| `model_8b_v4_step8100.tar.gz` | 14 GB | 학습된 체크포인트 (step 8,100, SFT 완료본) |
 | `data_test_200.tar.gz` | 약 1.2 GB | 테스트 아이템 29종 × 200건 |
 
 둘 다 이 폴더(`20260808_test/`) 안에서 풉니다.
 
 ```bash
 cd 20260808_test
-tar xzf model_8b_v4_step2400.tar.gz   # → vlm_8B_v4_step2400_20260808/
+tar xzf model_8b_v4_step8100.tar.gz   # → vlm_8B_v4_step8100_20260809/
 tar xzf data_test_200.tar.gz          # → data/
 ```
 
@@ -89,14 +89,27 @@ python run_eval.py --tasks det_objects_azdeg,qa --items 20
 잘리는데, 그 실패는 "못 푸는 모델" 과 똑같이 보입니다.
 
 **디스크는 32 GB 가 필요합니다** — 받은 tar 15 GB 와 푼 체크포인트 17 GB. 체크포인트를
-풀고 나면 `model_8b_v4_step2400.tar.gz` 를 지워 14 GB 를 회수할 수 있습니다.
+풀고 나면 `model_8b_v4_step8100.tar.gz` 를 지워 14 GB 를 회수할 수 있습니다.
 
-## 확인된 동작
+## 이 체크포인트의 점수
 
-원본 서버에서 아카이브를 풀어 인자 없이 실행해 확인했습니다.
+테스트 200 건씩, `data/` 와 같은 분할로 잰 값입니다.
 
-```
-det_objects_3dbbox  F1 0.129  size_mae 1.83 m  yaw_mae 12.5 deg
-plan_ego_control    속도MAE 0.64 m/s  요레이트MAE 3.3 deg/s  커버 1.00
-track_step_bbox     F1 0.526  클래스 1.00  id승계 1.00 (13건)
-```
+| 태스크 | 지표 | 값 |
+|---|---|---|
+| `track_step_azdeg` | F1 | 0.698 |
+| `track_step_bbox` | F1 | 0.679 |
+| `det_objects_azdeg` | F1 | 0.276 |
+| `det_objects_3dbbox` | F1 · size MAE · yaw MAE | 0.267 · 0.297 m · 18.8° |
+| `motion_seg_bbox` | F1 | 0.258 |
+| `motion_seg_azdeg` | F1 | 0.248 |
+| `plan_ego_xy` | 변위 MAE | 0.914 m |
+| `plan_ego_control` | 속도 MAE | 0.571 m/s |
+| `agent_traj_azdeg` | 거리 MAE · 커버리지 | 1.882 m · 0.965 |
+| `agent_traj_bbox` | IoU · 커버리지 | 0.365 · 0.967 |
+| `qa` / `qa_cot` | 정답률 | 0.500 / 0.565 |
+
+낮은 F1 을 곧바로 능력 부족으로 읽지 마세요. 이 표를 만드는 동안 채점기 결함을
+두 개 고쳤고, 둘 다 모델이 아니라 채점기가 답을 못 읽던 것이었습니다 —
+`agent_traj_bbox` 는 커버리지 0.00 으로 나오다가 형식을 읽게 하니 0.967 이
+됐습니다.
