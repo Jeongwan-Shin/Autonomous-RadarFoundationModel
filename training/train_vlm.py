@@ -178,22 +178,33 @@ def number_distance_loss(logits, labels, number_ids, number_values):
     truth = lookup[labels[positions]]
     selected = logits[positions][:, number_ids]
     probs = torch.softmax(selected.float(), dim=-1)
-    scale = truth.abs().mean().clamp(min=1.0)
-    # The expectation of the distance, not the distance of the expectation.
+
+    # The expectation of the squared distance, not the distance of the
+    # expectation.
     #
     # The first version penalised |E[v] - truth|, which any distribution whose
     # mean lands on the truth drives to zero -- half the mass on 0 and half on
     # 200 scores perfectly for a target of 100, while the argmax that generation
-    # actually emits is 0 or 200. Trained at weight 0.3 for 8,100 steps the
-    # model found exactly that: `train/number_distance` fell to 0.004 while
-    # generation collapsed to the ten single digits, 20 m of waypoint error and
-    # F1 0.03. By Jensen the old term is a lower bound on this one, and it was
-    # the slack in that bound the model was living in.
+    # actually emits is 0 or 200. Verified on constructed distributions: that
+    # one scored 0.0000. This form is linear in the probabilities, so its
+    # minimum is the point mass on the true value and spreading is always paid
+    # for.
     #
-    # E[|v - truth|] is minimised only by putting the mass on the true value,
-    # so spreading it is always paid for.
-    gap = (number_values.unsqueeze(0) - truth.unsqueeze(1)).abs() / scale
-    return (probs * gap).sum(-1).mean()
+    # Squared rather than absolute because the scorers are thresholded -- 2 m
+    # for detection matching, IoU 0.3 for boxes -- so a metre of error is
+    # nearly free and twenty is a total miss. L1 separates those by 20x, L2 by
+    # 400x, which is closer to what the metric actually does.
+    #
+    # Normalised per position, not per batch. A single batch scale would be the
+    # mean over every number in it, and the tasks differ by 254x: box
+    # coordinates run to a median of 492 while `plan_ego` sits at 2. Squaring
+    # that mismatch puts the box tasks 64,000x ahead of the rest, which is not
+    # a weighting anyone chose. Dividing each position by its own magnitude
+    # makes the term a relative error, and the clamp keeps a truth of 0.0 --
+    # common for a yaw or a lateral offset -- from dividing by nothing.
+    scale = truth.abs().clamp(min=1.0).unsqueeze(1)
+    gap = (number_values.unsqueeze(0) - truth.unsqueeze(1)) / scale
+    return (probs * gap.pow(2)).sum(-1).mean()
 
 
 def setup():
