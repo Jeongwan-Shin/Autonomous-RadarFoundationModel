@@ -117,6 +117,18 @@ def load_model(args):
     llm = AutoModelForImageTextToText.from_pretrained(
         source, dtype=torch.bfloat16, attn_implementation="sdpa").to(device)
     pad_id = add_radar_tokens(tokenizer, llm)
+    # The trainer adds these; this did not, and nothing complained. The model
+    # kept emitting the number tokens it was trained on -- ids past 151,672 --
+    # and a tokeniser that had never heard of them dropped every one on decode.
+    # What came back was the surviving plain digits: "+1s 1 m/s" where the model
+    # had actually written "+1s 20.6 m/s". Measured on the same checkpoint and
+    # the same clips, that read as 7.59 m/s of error against a true 0.97.
+    from training.number_tokens import add_number_tokens
+    n_num = add_number_tokens(tokenizer, llm)
+    if llm.get_input_embeddings().weight.shape[0] != len(tokenizer):
+        raise SystemExit(
+            f"어휘 불일치: 모델 {llm.get_input_embeddings().weight.shape[0]:,} "
+            f"vs 토크나이저 {len(tokenizer):,}")
     processor.tokenizer = tokenizer
 
     state = torch.load(os.path.join(args.checkpoint, "adapters.pt"),
@@ -136,7 +148,7 @@ def load_model(args):
         from peft import PeftModel
         llm = PeftModel.from_pretrained(llm, lora)
     llm.eval()
-    log(f"weights from {source}")
+    log(f"weights from {source}  (vocab {len(tokenizer):,}, +{n_num:,} number tokens)")
     return tokenizer, processor, llm, encoder, connector, pad_id, trained, device
 
 
