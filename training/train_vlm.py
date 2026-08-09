@@ -177,10 +177,23 @@ def number_distance_loss(logits, labels, number_ids, number_values):
     lookup[number_ids] = number_values
     truth = lookup[labels[positions]]
     selected = logits[positions][:, number_ids]
-    expected = (torch.softmax(selected.float(), dim=-1)
-                * number_values.unsqueeze(0)).sum(-1)
+    probs = torch.softmax(selected.float(), dim=-1)
     scale = truth.abs().mean().clamp(min=1.0)
-    return torch.nn.functional.smooth_l1_loss(expected / scale, truth / scale)
+    # The expectation of the distance, not the distance of the expectation.
+    #
+    # The first version penalised |E[v] - truth|, which any distribution whose
+    # mean lands on the truth drives to zero -- half the mass on 0 and half on
+    # 200 scores perfectly for a target of 100, while the argmax that generation
+    # actually emits is 0 or 200. Trained at weight 0.3 for 8,100 steps the
+    # model found exactly that: `train/number_distance` fell to 0.004 while
+    # generation collapsed to the ten single digits, 20 m of waypoint error and
+    # F1 0.03. By Jensen the old term is a lower bound on this one, and it was
+    # the slack in that bound the model was living in.
+    #
+    # E[|v - truth|] is minimised only by putting the mass on the true value,
+    # so spreading it is always paid for.
+    gap = (number_values.unsqueeze(0) - truth.unsqueeze(1)).abs() / scale
+    return (probs * gap).sum(-1).mean()
 
 
 def setup():
