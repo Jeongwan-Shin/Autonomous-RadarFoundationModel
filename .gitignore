@@ -11,6 +11,7 @@ runs/
 !RaVL-Autobench.pdf
 !RaVL_dataset_v2.pdf
 !RaVL_tracking.pdf
+!digit_weight_loss.pdf
 
 # Data and model artefacts never belong in the tree -- paths.py points at them.
 *.parquet
