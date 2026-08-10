@@ -7,6 +7,7 @@
     python verify_bundle.py
 """
 
+import argparse
 import json
 import os
 import sys
@@ -17,9 +18,12 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def main():
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--data", default=os.path.join(HERE, "data"))
+    args = ap.parse_args(argv)
     bad = []
-    data = os.path.join(HERE, "data")
+    data = args.data
 
     # 1. 저장소를 참조하지 않는가
     sys.path.insert(0, HERE)
@@ -38,10 +42,26 @@ def main():
 
     # 2. 아이템이 다 있고, 파일이 실제로 열리는가
     manifest = json.load(open(os.path.join(data, "manifest.json")))
-    print(f"매니페스트: {manifest['split']} 분할, 태스크 {len(manifest['tasks'])}종")
+    print(f"매니페스트: {manifest['split']} 분할, 클립 {manifest.get('n_clips','?')}개, "
+          f"태스크 {len(manifest['tasks'])}종")
+
+    # 클립이 자기 프레임과 ego 를 갖고 있는가. 아이템은 프레임을 번호로만
+    # 가리키므로, 클립 폴더가 비면 모든 태스크가 한꺼번에 죽는다.
+    clips = [json.loads(l) for l in open(os.path.join(data, "clips.jsonl"))]
+    for c in clips:
+        d = os.path.join(data, "clips", c["clip_id"])
+        got = len([f for f in os.listdir(os.path.join(d, "frames"))
+                   if f.endswith(".jpg")]) if os.path.isdir(
+                       os.path.join(d, "frames")) else 0
+        if got != c["n_frames"]:
+            bad.append(f"{c['clip_id']}: 프레임 {got} / {c['n_frames']}")
+        if not os.path.exists(os.path.join(d, "ego.npy")):
+            bad.append(f"{c['clip_id']}: ego.npy 없음")
+    print(f"클립 {len(clips)}개 · 프레임과 ego 확인")
+
     total = 0
     for task, n in sorted(manifest["tasks"].items()):
-        path = os.path.join(data, f"{task}.jsonl")
+        path = os.path.join(data, "by_task", f"{task}.jsonl")
         if not os.path.exists(path):
             bad.append(f"{task}.jsonl 없음")
             continue
@@ -53,14 +73,18 @@ def main():
             bad.append(f"{task}: 채점기가 일반 텍스트로 떨어짐")
         # 첫 건과 끝 건을 실제로 열어 본다
         for rec in (rows[0], rows[-1]):
-            d = os.path.join(data, rec["dir"])
-            for name in rec["frames"]:
-                p = os.path.join(d, "frames", name)
+            d = os.path.join(data, "clips", rec["clip_id"])
+            for idx in rec["frames"]:
+                p = os.path.join(d, "frames", f"f{idx:02d}.jpg")
                 if not os.path.exists(p):
-                    bad.append(f"{rec['id']}: {name} 없음"); break
+                    bad.append(f"{rec['id']}: f{idx:02d}.jpg 없음"); break
             else:
-                Image.open(os.path.join(d, "frames", rec["frames"][0])).convert("RGB")
-            z = np.load(os.path.join(d, "radar.npz"))
+                Image.open(os.path.join(
+                    d, "frames", f"f{rec['frames'][0]:02d}.jpg")).convert("RGB")
+            rp = os.path.join(d, "radar", f"{rec['radar']}.npz")
+            if not os.path.exists(rp):
+                bad.append(f"{rec['id']}: {rec['radar']}.npz 없음"); continue
+            z = np.load(rp)
             if "points" not in z or "scan" not in z or "shape" not in z:
                 bad.append(f"{rec['id']}: radar.npz 내용 부족")
             if not rec.get("user") or rec.get("target") is None:
@@ -71,7 +95,8 @@ def main():
 
     # 3. 채점기가 정답을 만점으로 매기는가
     for task in sorted(manifest["tasks"]):
-        rows = [json.loads(l) for l in open(os.path.join(data, f"{task}.jsonl"))]
+        rows = [json.loads(l) for l in
+                open(os.path.join(data, "by_task", f"{task}.jsonl"))]
         r = rows[0]
         fn = scorer_for(task)
         try:

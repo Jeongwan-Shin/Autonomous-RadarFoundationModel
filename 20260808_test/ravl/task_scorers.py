@@ -186,6 +186,37 @@ def _match(predicted, truth, threshold=None):
     return pairs
 
 
+def _per_class(total):
+    """{class: {f1, recall, precision, n}} from the cls_* counters.
+
+    One F1 hides the imbalance rather than reporting it. 84.5% of labelled
+    objects are automobiles and 10.3% are people; the remaining eight classes
+    together are 5.2%, and animal is 0.09%. A model that never detects a
+    cyclist loses well under a point of overall F1, so the aggregate cannot
+    tell it apart from a model that detects everything.
+
+    The mix cannot be evened out by dropping items either -- the task is "list
+    every road user", and 93.95% of detection answers contain an automobile.
+    Keeping only the answers that carry a rare class still leaves 61.4%
+    automobiles and throws away three quarters of the data; keeping only the
+    answers with no automobile leaves person at 80.5% and throws away 93%. So
+    the class mix stays as the road is, and this reports what happens per
+    class instead of distorting the scenes to make one number look even.
+    """
+    names = {k[4:].rsplit("_", 1)[0] for k in total if k.startswith("cls_")}
+    out = {}
+    for c in sorted(names):
+        tp = total.get(f"cls_{c}_tp", 0)
+        fn = total.get(f"cls_{c}_fn", 0)
+        fp = total.get(f"cls_{c}_fp", 0)
+        if tp + fn == 0:                 # never in the truth: nothing to score
+            continue
+        prec, rec = tp / max(tp + fp, 1), tp / max(tp + fn, 1)
+        out[c] = {"f1": 2 * prec * rec / max(prec + rec, 1e-9),
+                  "recall": rec, "precision": prec, "n": tp + fn}
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["n"])) or None
+
+
 def score_objects(generated, reference):
     predicted, truth = parse_objects(generated), parse_objects(reference)
     pairs = _match(predicted, truth)
@@ -196,6 +227,7 @@ def score_objects(generated, reference):
            "z_err": 0.0, "z_n": 0,
            "size_err": 0.0, "size_n": 0, "yaw_err": 0.0, "yaw_n": 0}
     for p, t in pairs:
+        out[f"cls_{t['cls']}_tp"] = out.get(f"cls_{t['cls']}_tp", 0) + 1
         out["class_ok"] += p["cls"] == t["cls"]
         out["motion_ok"] += p["moving"] == t["moving"]
         if p.get("size") and t.get("size"):
@@ -220,6 +252,14 @@ def score_objects(generated, reference):
         if t["tid"] is not None:
             out["id_total"] += 1
             out["id_ok"] += p["tid"] == t["tid"]
+    seen_t = {id(o) for _, o in pairs}
+    seen_p = {id(o) for o, _ in pairs}
+    for o in truth:
+        if id(o) not in seen_t:
+            out[f"cls_{o['cls']}_fn"] = out.get(f"cls_{o['cls']}_fn", 0) + 1
+    for o in predicted:
+        if id(o) not in seen_p:
+            out[f"cls_{o['cls']}_fp"] = out.get(f"cls_{o['cls']}_fp", 0) + 1
     return out
 
 
@@ -261,10 +301,12 @@ HORIZON_BBOX = re.compile(r"\+(\d)s\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*"
 
 
 def _horizons(text):
-    """{horizon: value} where value is (range, az), a box, or None for gone."""
+    """{horizon: value}: a polar pair, an (x, y) offset, a box, or gone."""
     out = {}
     for h, r, a in HORIZON.findall(text or ""):
         out[int(h)] = ("polar", float(r), float(a))
+    for h, x, y in WAYPOINT.findall(text or ""):
+        out[int(h)] = ("xy", float(x), float(y))
     for h, x1, y1, x2, y2 in HORIZON_BBOX.findall(text or ""):
         out[int(h)] = ("bbox", [float(x1), float(y1), float(x2), float(y2)])
     for h in HORIZON_GONE.findall(text or ""):
@@ -273,14 +315,50 @@ def _horizons(text):
 
 
 def score_trajectory(generated, reference):
-    got = {int(h): (float(r), float(a)) for h, r, a in HORIZON.findall(generated or "")}
-    want = {int(h): (float(r), float(a)) for h, r, a in HORIZON.findall(reference or "")}
+    """Where the named object goes, in whichever form the instruction asked for.
+
+    This read only the polar form, so `agent_traj_bbox` -- whose answer is
+    "+1s [478, 674, 487, 686]" -- matched nothing and reported coverage 0.00 on
+    every item. That reads as a model producing no answer; it was producing
+    boxes within ten pixels of the truth. `_horizons` already handled all three
+    forms, including "leaves the forward sector"; this simply never called it.
+
+    Boxes are scored by IoU rather than metres, and an exit is right only when
+    the reference also exits -- claiming an object left when it stayed is a
+    miss, not a free pass.
+    """
+    got, want = _horizons(generated), _horizons(reference)
     shared = sorted(set(got) & set(want))
-    out = {"n": 1, "horizons": len(shared), "expected": len(want),
-           "range_err": 0.0, "az_err": 0.0}
+    out = {"n": 1, "horizons": 0, "expected": len(want),
+           "range_err": 0.0, "az_err": 0.0, "iou": 0.0, "iou_n": 0,
+           "gone_ok": 0, "gone_n": 0, "disp_err": 0.0, "disp_n": 0,
+           "final_err": 0.0, "final_n": 0, "polar_n": 0}
     for h in shared:
-        out["range_err"] += abs(got[h][0] - want[h][0])
-        out["az_err"] += abs(got[h][1] - want[h][1])
+        a, b = got[h], want[h]
+        if b[0] == "gone":
+            out["gone_n"] += 1
+            out["gone_ok"] += a[0] == "gone"
+            out["horizons"] += 1
+        elif a[0] == b[0] == "polar":
+            out["horizons"] += 1
+            out["polar_n"] += 1
+            out["range_err"] += abs(a[1] - b[1])
+            out["az_err"] += abs(a[2] - b[2])
+        elif a[0] == b[0] == "xy":
+            # Displacement in metres -- what ADE and FDE mean. The polar branch
+            # above cannot produce this: it sums a range error in metres and a
+            # bearing error in degrees separately, and those do not add.
+            out["horizons"] += 1
+            err = math.hypot(a[1] - b[1], a[2] - b[2])
+            out["disp_err"] += err
+            out["disp_n"] += 1
+            if h == max(want):
+                out["final_err"] += err
+                out["final_n"] += 1
+        elif a[0] == b[0] == "bbox":
+            out["horizons"] += 1
+            out["iou"] += _iou(a[1], b[1])
+            out["iou_n"] += 1
     return out
 
 
@@ -336,6 +414,7 @@ SCORERS = {
     "plan_ego_control": score_control,
     "agent_traj_azdeg": score_trajectory,
     "agent_traj_bbox": score_trajectory,
+    "agent_traj_xy": score_trajectory,
     "radar_probe": score_quantity,
     "radar_transfer": score_quantity,
     "radar_structure": score_quantity,
@@ -392,16 +471,31 @@ def summarise(task, records, correlation=None, _fn=None):
                 "yaw_mae": (total["yaw_err"] / total["yaw_n"]
                             if total.get("yaw_n") else None),
                 "id_acc": (total["id_ok"] / total["id_total"]
-                           if total["id_total"] else None)}
+                           if total["id_total"] else None),
+                "per_class": _per_class(total)}
     if fn is score_waypoints:
         return {"metric": "waypoints", "n": n,
                 "displacement_mae_m": total["err"] / max(total["horizons"], 1),
                 "coverage": total["horizons"] / max(total["expected"], 1)}
     if fn is score_trajectory:
-        h = max(total["horizons"], 1)
+        # Each error is divided by the horizons that actually carried its form.
+        # Dividing all of them by `horizons` made an (x, y) task report
+        # `range_mae_m` 0.0 -- not "exact", but "no polar answer was read",
+        # which is the failure this scorer has already been bitten by twice.
+        polar = max(total.get("polar_n", 0), 1)
         return {"metric": "trajectory", "n": n,
-                "range_mae_m": total["range_err"] / h,
-                "az_mae_deg": total["az_err"] / h,
+                "range_mae_m": (total["range_err"] / polar
+                                if total.get("polar_n") else None),
+                "az_mae_deg": (total["az_err"] / polar
+                               if total.get("polar_n") else None),
+                "ade_m": (total["disp_err"] / total["disp_n"]
+                          if total.get("disp_n") else None),
+                "fde_m": (total["final_err"] / total["final_n"]
+                          if total.get("final_n") else None),
+                "iou": (total["iou"] / total["iou_n"]
+                        if total.get("iou_n") else None),
+                "gone_acc": (total["gone_ok"] / total["gone_n"]
+                             if total.get("gone_n") else None),
                 "coverage": total["horizons"] / max(total["expected"], 1)}
     if fn is score_quantity:
         scored = max(total["scored"], 1)
@@ -519,6 +613,12 @@ def reward_trajectory(generated, reference):
             total += 1.0
         elif truth[0] == "bbox":
             total += _iou(mine[1], truth[1])
+        elif truth[0] == "xy":
+            # One displacement, not a range and a bearing averaged. Falling
+            # through to the polar branch would have read x as a range and y as
+            # an azimuth and paid the model on two decays that mean nothing.
+            total += _decay(math.hypot(mine[1] - truth[1], mine[2] - truth[2]),
+                            HALF_CREDIT["agent_traj"])
         else:
             rng = _decay(abs(mine[1] - truth[1]), HALF_CREDIT["agent_traj"])
             az = _decay(abs(mine[2] - truth[2]), HALF_CREDIT["agent_traj_az"])
@@ -576,6 +676,7 @@ REWARDS = {
     "plan_ego_control": reward_control,
     "agent_traj_azdeg": reward_trajectory,
     "agent_traj_bbox": reward_trajectory,
+    "agent_traj_xy": reward_trajectory,
     "radar_probe": reward_quantity,
     "radar_transfer": reward_quantity,
     "depth_range": reward_quantity,
@@ -739,7 +840,7 @@ def _cot_reward(base):
 
 for _base in ("det_objects_azdeg", "det_objects_3dbbox", "plan_ego_xy",
               "plan_ego_control", "agent_traj_azdeg", "agent_traj_bbox",
-              "motion_seg_azdeg", "motion_seg_bbox",
+              "agent_traj_xy", "motion_seg_azdeg", "motion_seg_bbox",
               "qa", "track_step_azdeg", "track_step_bbox"):
     REWARDS[f"{_base}_cot"] = _cot_reward(_base)
 
@@ -891,6 +992,6 @@ def cot_scorer(plain):
 # grades.
 for _plain in ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
                "track_step_bbox", "plan_ego_xy", "plan_ego_control",
-               "agent_traj_azdeg", "agent_traj_bbox", "motion_seg_azdeg",
-               "motion_seg_bbox", "qa"):
+               "agent_traj_azdeg", "agent_traj_bbox", "agent_traj_xy",
+               "motion_seg_azdeg", "motion_seg_bbox", "qa"):
     SCORERS[f"{_plain}_cot"] = cot_scorer(SCORERS[_plain])

@@ -16,11 +16,11 @@ sin/cos 로 펼치면, 두 숫자의 내적이 값 차이에 따라 단조롭게
 거리 구조가 들어가 있고, 학습이 그것을 무너뜨리지 않도록 `--digit-weight` 가
 값 차이에 비례하는 벌점을 계속 준다.
 
-이 사본은 읽기 전용이다. 어휘를 다시 만드는 --scan 과 확인용 --check 는 원본
-저장소에만 있다 -- 번들 안에서 어휘를 다시 만들면 학습 때와 순서가 달라져
-151,672 이후의 모든 토큰 id 가 밀린다.
+    python -m training.number_tokens --scan      # 필요한 값 목록을 데이터에서
+    python -m training.number_tokens --check     # 토큰화와 거리 구조 확인
 """
 
+import argparse
 import os
 import re
 import sys
@@ -92,3 +92,88 @@ def value_embeddings(values, dim, scale=0.02, n_bands=64):
     take = min(dim, feat.shape[1])
     out[:, :take] = feat[:, :take]
     return torch.tensor(out * scale / max(out.std(), 1e-8), dtype=torch.float32)
+
+
+def scan(paths_module, limit_per_task=20000, coverage=0.999):
+    """Which literals actually occur, and how many cover `coverage` of them."""
+    import collections
+    import pandas as pd
+    counts = collections.Counter()
+    path = os.path.join(paths_module.COMMON_DIR,
+                        "instruct_items_tasks01_06.parquet")
+    d = pd.read_parquet(path, columns=["task", "target", "prompt"])
+    for task, g in d.groupby("task"):
+        g = g.head(limit_per_task)
+        for col in ("target", "prompt"):
+            for s in g[col]:
+                counts.update(NUMBER.findall(s))
+    total = sum(counts.values())
+    kept, seen = [], 0
+    for lit, n in counts.most_common():
+        kept.append(lit)
+        seen += n
+        if seen >= coverage * total:
+            break
+    return kept, counts, total
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--scan", action="store_true",
+                    help="rebuild number_vocab.txt from the built data")
+    ap.add_argument("--coverage", type=float, default=0.999)
+    ap.add_argument("--check", action="store_true")
+    args = ap.parse_args(argv)
+
+    if args.scan:
+        from datatools import paths
+        kept, counts, total = scan(paths, coverage=args.coverage)
+        with open(VOCAB_PATH, "w") as fh:
+            fh.write("\n".join(kept) + "\n")
+        dec = sum(1 for k in kept if "." in k)
+        print(f"고유 숫자 {len(counts):,} 중 {len(kept):,} 개로 "
+              f"{100*args.coverage:.1f}% 를 덮음")
+        print(f"  소수 {dec:,} · 정수 {len(kept)-dec:,}")
+        print(f"wrote {VOCAB_PATH}")
+        return 0
+
+    if args.check:
+        from transformers import AutoTokenizer
+        from training.train_vlm import MODEL_DIR
+        tok = AutoTokenizer.from_pretrained(MODEL_DIR["8B"])
+        before = len(tok)
+        n = add_number_tokens(tok)
+        print(f"어휘 {before:,} → {len(tok):,}  (+{n:,})")
+        for s in ("automobile 24 m az +13 deg",
+                  "automobile (9.7, -13.0, 0.9) size 5.3x2.2x1.9 m yaw -179 deg",
+                  "#12 automobile [301, 495, 371, 569]",
+                  "+1s (+8.8, +0.0)"):
+            ids = tok(s, add_special_tokens=False)["input_ids"]
+            print(f"\n  {len(ids):>3} 토큰  {s}")
+            print("      " + " | ".join(repr(tok.decode([i])) for i in ids))
+
+        lits = number_tokens()
+        vals = np.array([float(x) for x in lits])
+        E = value_embeddings(vals, 4096)
+        E = E / E.norm(dim=1, keepdim=True)
+        pick = [i for i, v in enumerate(vals) if v in (100.0, 110.0, 200.0, 900.0)]
+        got = {vals[i]: i for i in pick}
+        if len(got) == 4:
+            a = got[100.0]
+            print("\n값 기반 초기화의 거리 구조")
+            for b in (110.0, 200.0, 900.0):
+                print(f"  100 ↔ {b:.0f}: 유사도 {float(E[a] @ E[got[b]]):+.3f}")
+        sub = np.argsort(np.abs(vals))[:400]
+        S = (E[sub] @ E[sub].T).numpy()
+        D = np.abs(np.subtract.outer(vals[sub], vals[sub]))
+        iu = np.triu_indices(len(sub), 1)
+        print(f"  값 차이 vs 유사도 상관 {np.corrcoef(D[iu], S[iu])[0,1]:+.3f} "
+              f"(음수일수록 좋음)")
+        return 0
+
+    ap.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

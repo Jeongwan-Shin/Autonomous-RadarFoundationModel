@@ -139,11 +139,18 @@ def load_model(args):
 
 
 def load_item(root, rec, n_frames, max_points, n_channels):
-    """Rebuild one sample's tensors from the bundle."""
-    d = os.path.join(root, rec["dir"])
-    frames = [Image.open(os.path.join(d, "frames", n)).convert("RGB")
-              for n in rec["frames"]]
-    z = np.load(os.path.join(d, "radar.npz"))
+    """Rebuild one sample's tensors from the bundle.
+
+    The bundle is clip-centric: a clip holds its twenty frames once and an
+    item names the ones it uses by index, so `det_objects` reading one frame
+    and `track_step` reading five share the same files. Radar windows are
+    shared the same way -- two items at the same instant and sample rate name
+    the same npz.
+    """
+    d = os.path.join(root, "clips", rec["clip_id"])
+    frames = [Image.open(os.path.join(d, "frames", f"f{i:02d}.jpg")).convert("RGB")
+              for i in rec["frames"]]
+    z = np.load(os.path.join(d, "radar", f"{rec['radar']}.npz"))
     pts = np.zeros((n_frames, max_points, n_channels), dtype=np.float32)
     mask = np.zeros((n_frames, max_points), dtype=bool)
     kept, scan = z["points"].astype(np.float32), z["scan"]
@@ -168,7 +175,8 @@ def run_task(task, records, args, loaded, root):
         budget = max(budget, args.max_new_floor)
 
     for i, rec in enumerate(records):
-        z = np.load(os.path.join(root, rec["dir"], "radar.npz"))
+        z = np.load(os.path.join(root, "clips", rec["clip_id"], "radar",
+                                 f"{rec['radar']}.npz"))
         n_frames, max_points, _ = z["shape"]
         frames, points, mask = load_item(root, rec, int(n_frames),
                                          int(max_points), n_channels)
@@ -229,12 +237,17 @@ def main(argv=None):
     manifest = json.load(open(os.path.join(args.data, "manifest.json")))
     names = (sorted(manifest["tasks"]) if args.tasks == "all"
              else [t.strip() for t in args.tasks.split(",") if t.strip()])
+    log(f"클립 {manifest.get('n_clips', '?')}개 · 아이템 "
+        f"{manifest.get('n_items', 0):,}건 · 태스크 {len(manifest['tasks'])}종")
+    if manifest.get("n_clips", 0) < 50:
+        log("  주의: 클립 수가 적어 여기 나오는 점수는 지표가 아니라 참고입니다. "
+            "채점용 표본을 늘리려면 export_items.py --clips 를 올리세요.")
     os.makedirs(args.out, exist_ok=True)
     loaded = load_model(args)
 
     scores, all_gen = {}, []
     for task in names:
-        path = os.path.join(args.data, f"{task}.jsonl")
+        path = os.path.join(args.data, "by_task", f"{task}.jsonl")
         if not os.path.exists(path):
             log(f"--- {task}: 번들에 없음")
             continue
