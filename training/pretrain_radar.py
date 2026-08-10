@@ -171,6 +171,12 @@ def main(argv=None):
                          "model sees and what the routed experts split on")
     ap.add_argument("--frames", type=int, default=20)
     ap.add_argument("--max-points", type=int, default=1024)
+    # nuScenes' ARS408 gives 125 returns per scan against this rig's median
+    # 815, so an encoder meant to read both has to stop treating density as a
+    # signal. 80 is below the sparse end; 1024 is `max_points`, so the dense
+    # end is untouched.
+    ap.add_argument("--thin-low", type=int, default=80)
+    ap.add_argument("--thin-high", type=int, default=1024)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -204,10 +210,15 @@ def main(argv=None):
                   f"val {len(val_ids[radar]):,}")
 
     common = dict(n_frames=args.frames, max_points=args.max_points)
+    # Thinning is training only. Validation has to be measured on the scans the
+    # sensor actually produced, or the number moves with the augmentation
+    # rather than with the model.
+    train_common = dict(common, thin_to=(args.thin_low, args.thin_high))
     # One reader per radar, concatenated. RadarClipDataset keys its sensor id off
     # its own `radar`, so each half of the batch reports the sensor it came from
     # and the routed experts have something real to route on.
-    parts = [RadarClipDataset(train_ids[r], radar=r, **common) for r in radars]
+    parts = [RadarClipDataset(train_ids[r], radar=r, **train_common)
+             for r in radars]
     val_parts = [RadarClipDataset(val_ids[r][:400 // len(radars)], radar=r,
                                   **common) for r in radars]
     train_ds = torch.utils.data.ConcatDataset(parts)

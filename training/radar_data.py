@@ -51,8 +51,11 @@ SENSOR_NAME = {"srr0": "radar_front_center_srr_0",
                "mrr2": "radar_front_center_mrr_2",
                "lrr1": "radar_front_center_imaging_lrr_1"}
 
-CHANNELS = ("x", "y", "z", "radial_velocity", "doppler_residual", "rcs",
-            "snr", "range")
+# 채널 정의는 radar_encoder 에 있다 -- 인코더가 그 이름으로 기하 채널을
+# 골라야 하고, radar_data 가 이미 radar_encoder 를 참조하므로 방향은
+# 하나뿐이다.
+from training.radar_encoder import CHANNELS
+
 
 CLASSES = ("automobile", "person", "heavy_truck", "bus", "trailer", "rider",
            "protruding_object", "animal", "stroller", "other_vehicle",
@@ -62,8 +65,7 @@ CLASS_INDEX = {name: i for i, name in enumerate(CLASSES)}
 # Scales chosen from the measured ranges so every channel lands near unit
 # variance: range reaches 300 m, rcs spans -60..+60 dBsm, snr 11..50,
 # radial velocity +/-28 m/s.
-NORMALISE = np.array([50.0, 50.0, 5.0, 15.0, 5.0, 20.0, 10.0, 100.0],
-                     dtype=np.float32)
+NORMALISE = np.array([50.0, 50.0, 100.0, 15.0, 5.0, 20.0], dtype=np.float32)
 
 MOVING_THRESHOLD_MS = 1.0
 BOX_MARGIN = 1.3
@@ -84,19 +86,50 @@ class RadarClipDataset(Dataset):
 
     def __init__(self, clip_ids, radar="lrr1", n_frames=20, max_points=1024,
                  nvidia_root=paths.NVIDIA_ROOT, common_dir=paths.COMMON_DIR,
-                 with_boxes=True):
+                 with_boxes=True, thin_to=None):
         self.clip_ids = list(clip_ids)
         self.radar = radar
         self.n_frames = n_frames
         self.max_points = max_points
         self.nvidia_root = nvidia_root
         self.with_boxes = with_boxes
+        # (low, high) returns per scan to thin down to, or None to leave a scan
+        # as the sensor gave it. Training only -- see `_thin`.
+        self.thin_to = thin_to
         index = pd.read_parquet(os.path.join(common_dir, "nvidia_clips.parquet"))
         self.index = index.loc[[c for c in self.clip_ids if c in index.index]]
         self.clip_ids = list(self.index.index)
 
     def __len__(self):
         return len(self.clip_ids)
+
+    def _thin(self, mask, index):
+        """Drop returns at random so density is a nuisance, not a cue.
+
+        This rig's LRR gives a median 815 returns per scan; the ARS408 that
+        nuScenes carries gives 125, measured over 400 scans. An encoder that
+        only ever saw dense scans reads a sparse one as 85% empty, and that is
+        a larger shift than the two channels the two rigs do not share.
+        Thinning each scan to a random count makes the number of returns
+        uninformative, so the same weights read either sensor.
+
+        Log-uniform rather than uniform: the interesting end is the sparse one,
+        and a uniform draw over 80..815 would put four fifths of its mass above
+        250, where the model already works.
+
+        Points are dropped by clearing the mask rather than by rewriting the
+        arrays, so the per-point labels beside them stay aligned.
+        """
+        low, high = self.thin_to
+        rng = np.random.default_rng(index * 9973 + 17)
+        for f in range(mask.shape[0]):
+            present = np.flatnonzero(mask[f])
+            if len(present) <= low:
+                continue
+            target = int(round(np.exp(rng.uniform(
+                np.log(low), np.log(min(high, len(present)))))))
+            drop = rng.choice(present, len(present) - target, replace=False)
+            mask[f, drop] = False
 
     def _ego(self, row):
         ego = read_member(self.nvidia_root, row["egomotion_zip"],
@@ -238,11 +271,10 @@ class RadarClipDataset(Dataset):
                 order = np.arange(n)
 
             rng = np.hypot(rig[order, 0], rig[order, 1])
-            stack = np.stack([rig[order, 0], rig[order, 1], rig[order, 2],
+            stack = np.stack([rig[order, 0], rig[order, 1], rng,
                               scan["radial_velocity"].to_numpy()[order],
                               residual[order],
-                              scan["rcs"].to_numpy()[order],
-                              scan["snr"].to_numpy()[order], rng], axis=1)
+                              scan["rcs"].to_numpy()[order]], axis=1)
             features[f, :n] = (stack / NORMALISE).astype(np.float32)
             mask[f, :n] = True
             moving[f, :n] = (residual[order] > MOVING_THRESHOLD_MS).astype(np.int64)
@@ -260,6 +292,9 @@ class RadarClipDataset(Dataset):
                     if inside.any():
                         box_class[f, :n][inside] = CLASS_INDEX.get(
                             box.label_class, len(CLASSES))
+
+        if self.thin_to is not None:
+            self._thin(mask, i)
 
         return {"clip_id": clip_id,
                 "points": torch.from_numpy(features),
