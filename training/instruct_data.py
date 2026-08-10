@@ -48,6 +48,7 @@ import random
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 from transformers.video_utils import VideoMetadata
@@ -102,7 +103,8 @@ for _t in ("track_step_azdeg", "track_step_bbox",
     WINDOWS[_t] = (5, 4, 5)
 for _t in ("plan_ego_xy", "plan_ego_control", "plan_ego_xy_cot",
            "plan_ego_control_cot", "agent_traj_azdeg", "agent_traj_bbox",
-           "agent_traj_azdeg_cot", "agent_traj_bbox_cot",
+           "agent_traj_xy", "agent_traj_azdeg_cot", "agent_traj_bbox_cot",
+           "agent_traj_xy_cot",
            "motion_seg_azdeg", "motion_seg_bbox",
            "motion_seg_azdeg_cot", "motion_seg_bbox_cot"):
     WINDOWS[_t] = (2, 10, 2)
@@ -147,7 +149,7 @@ SENSOR_LABEL = {"lrr1": "imaging long-range radar",
 FRAME_ITEM_TASKS = ("det_objects_azdeg", "det_objects_3dbbox",
                     "track_step_azdeg", "track_step_bbox", "plan_ego_xy",
                     "plan_ego_control", "agent_traj_azdeg",
-                    "agent_traj_bbox", "motion_seg_azdeg",
+                    "agent_traj_bbox", "agent_traj_xy", "motion_seg_azdeg",
                     "motion_seg_bbox")
 
 # Same questions, but the answer is {"rationale": ..., "answer": ...} and the
@@ -158,6 +160,7 @@ FRAME_ITEM_TASKS = ("det_objects_azdeg", "det_objects_3dbbox",
 # direction the rationale claims agrees with the actual range change 92% of the
 # time for closing and 80% for receding, against 52% for always guessing.
 COT_TASKS = ("agent_traj_azdeg_cot", "agent_traj_bbox_cot",
+             "agent_traj_xy_cot",
              "motion_seg_azdeg_cot", "motion_seg_bbox_cot", "det_objects_azdeg_cot",
              "det_objects_3dbbox_cot", "track_step_azdeg_cot",
              "track_step_bbox_cot", "plan_ego_xy_cot",
@@ -249,6 +252,27 @@ def frame_reference(text):
 # question with the reason spoken aloud, so weighting them apart would be a
 # claim about which of the two the model should prefer, and there is no
 # measurement behind such a claim.
+# Within a task, balance the exposure of subgroups the prompt distinguishes.
+#
+# `plan_ego` carries a navigation command, and 88.2% of its anchors are
+# STRAIGHT (887,470 of 1,006,678, against LEFT 58,478 and RIGHT 60,730). A
+# model that never reads the command therefore loses almost nothing, which
+# defeats the point of conditioning on it. Cutting the data to 1:1:1 would fix
+# that by deleting 83% of the task -- 1,006,678 items down to 175,434 -- and
+# would freeze the ratio into the parquet.
+#
+# Weighting the draw instead keeps every item and makes the ratio a number that
+# can be changed without a rebuild. 2:1:1 rather than 1:1:1 because straight
+# driving is not an artefact to be corrected away: it is what the road mostly
+# is, and a model shown turns a third of the time learns a prior that will make
+# it turn when it should not.
+STRATA = {
+    "plan_ego_xy":          {"STRAIGHT": 2, "LEFT": 1, "RIGHT": 1},
+    "plan_ego_control":     {"STRAIGHT": 2, "LEFT": 1, "RIGHT": 1},
+    "plan_ego_xy_cot":      {"STRAIGHT": 2, "LEFT": 1, "RIGHT": 1},
+    "plan_ego_control_cot": {"STRAIGHT": 2, "LEFT": 1, "RIGHT": 1},
+}
+
 DEFAULT_MIXTURE = {
     # radar-dependent: the only items whose answer changes when the radar does
     "radar_probe": 2.0,
@@ -271,8 +295,10 @@ DEFAULT_MIXTURE = {
     "plan_ego_control_cot": 1.5,
     "agent_traj_azdeg": 1.5,
     "agent_traj_bbox": 1.5,
+    "agent_traj_xy": 1.5,
     "agent_traj_azdeg_cot": 1.5,
     "agent_traj_bbox_cot": 1.5,
+    "agent_traj_xy_cot": 1.5,
     "track_step_azdeg": 1.0,
     "track_step_bbox": 1.0,
     "track_step_azdeg_cot": 1.0,
@@ -593,9 +619,13 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
     if wanted_frame_items:
         path = os.path.join(paths.COMMON_DIR, "instruct_items_tasks01_06.parquet")
         if os.path.exists(path):
-            built = pd.read_parquet(
-                path, columns=["clip_id", "task", "frame", "prompt", "target",
-                               "split"])
+            cols = ["clip_id", "task", "frame", "prompt", "target", "split"]
+            have = set(pq.ParquetFile(path).schema.names)
+            if "strat" in have:
+                cols.append("strat")
+            built = pd.read_parquet(path, columns=cols)
+            if "strat" not in built.columns:
+                built["strat"] = ""
             built = built[in_split(built["split"], split)
                           & built["task"].isin(wanted_frame_items)]
             if keep is not None:
@@ -605,7 +635,7 @@ def load_items(tasks, split, limit_per_task=0, usable_clips=None, forms=None):
                     "clip_id": row.clip_id, "task": row.task,
                     "prompt": f"At frame {int(row.frame)}. {row.prompt}",
                     "target": row.target, "frame": int(row.frame) - 1,
-                    "verified": True,
+                    "verified": True, "strat": row.strat or "",
                 })
 
     if "radar_objects" in tasks:
@@ -811,13 +841,27 @@ class InstructDataset(Dataset):
         rng = random.Random(seed)
         buckets = {}
         for item in items:
-            buckets.setdefault(item["task"], []).append(item)
-        weights = {t: mixture.get(t, 1.0) for t in buckets}
+            task = item["task"]
+            strat = item.get("strat") or ""
+            key = (task, strat) if strat and task in STRATA else task
+            buckets.setdefault(key, []).append(item)
+        # A stratified task splits its own weight across its subgroups, so
+        # balancing inside a task never changes how much of the epoch that task
+        # gets against the others.
+        weights = {}
+        for key in buckets:
+            if isinstance(key, tuple):
+                task, strat = key
+                table = STRATA[task]
+                share = table.get(strat, 1.0) / (sum(table.values()) or 1.0)
+                weights[key] = mixture.get(task, 1.0) * share
+            else:
+                weights[key] = mixture.get(key, 1.0)
         total_weight = sum(weights.values()) or 1.0
 
         chosen, shortfall = [], 0
         picked = set()          # identity, since the records are plain dicts
-        for task, bucket in sorted(buckets.items()):
+        for task, bucket in sorted(buckets.items(), key=str):
             want = int(samples * weights[task] / total_weight)
             take = min(want, len(bucket))
             shortfall += want - take
@@ -825,7 +869,7 @@ class InstructDataset(Dataset):
             chosen.extend(drawn)
             picked.update(id(i) for i in drawn)
         if shortfall:
-            leftover = [i for _, b in sorted(buckets.items()) for i in b
+            leftover = [i for _, b in sorted(buckets.items(), key=str) for i in b
                         if id(i) not in picked]
             rng.shuffle(leftover)
             chosen.extend(leftover[:shortfall])
