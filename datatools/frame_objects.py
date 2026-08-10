@@ -27,7 +27,10 @@ One row per (clip_id, task, frame). Tasks emitted:
                      must keep the id it already has
   plan_ego       03-1 future ego waypoints as (x, y) offsets in the current ego
                      frame, forward-positive
-  agent_traj     03-2 one agent's future range/azimuth over the next 3 s
+  agent_traj     03-2 one agent's future position over the next 3 s, in
+                     whichever form the instruction asks for: (x, y) metres
+                     in the ego frame at the question, range/azimuth
+                     relative to the ego at each horizon, or an image box
   world_model    04  the scene 3 s ahead, conditioned on the ego action taken
   (04 world_model and 05 depth_range are held back from this build)
   motion_seg     06  moving vs stationary, from two perpendicular residuals.
@@ -98,6 +101,37 @@ PLAN_ANCHOR_S = (3, 5, 7, 9, 11, 13, 15, 17)
 # where another object goes needs its velocity, which the Doppler measures
 # instantaneously, not twenty seconds of context.
 LEAVES = "leaves the forward sector"
+
+# Classes from rarest to most common, measured over 266,850 labelled objects:
+# automobile 84.5%, person 10.3%, heavy_truck 1.6%, trailer 0.9%,
+# protruding_object 0.8%, rider 0.8%, bus 0.5%, other_vehicle 0.4%,
+# stroller 0.2%, animal 0.1%. Used to pick which agent task 03.2 asks about --
+# see `pick_agent`.
+CLASS_RARITY = ("animal", "stroller", "other_vehicle", "bus", "rider",
+                "protruding_object", "trailer", "heavy_truck", "person",
+                "automobile")
+
+
+def pick_agent(movers, turn):
+    """Which moving object task 03.2 asks about, alternating by anchor.
+
+    Always taking the nearest one made 73-78% of the questions about an
+    automobile, because that is what is nearest in 73-78% of scenes. The pool
+    is better than that -- among movers, 69.9% automobile, 20.9% person, 3.6%
+    rider, 2.4% heavy_truck -- and asking about the rarest class present
+    instead brings the questions to 54.2% automobile, 21.6% person, 7.3%
+    rider, 6.7% heavy_truck, 5.2% trailer.
+
+    Neither rule alone is right. Always-rarest never asks about the car
+    directly ahead in a busy scene, which is the case a planner cares about
+    most; always-nearest never asks about the cyclist. So the anchors
+    alternate, and both are covered in the same clip.
+    """
+    if turn % 2 == 0:
+        return movers[0]
+    order = {c: i for i, c in enumerate(CLASS_RARITY)}
+    return min(movers, key=lambda r: (order.get(r.label_class, 0),
+                                      r.range_m))
 
 # Task 06. Every two seconds: measured, only 3.7% of objects change between
 # moving and stationary from one second to the next, so a 1 Hz grid would be
@@ -328,17 +362,92 @@ def ego_controls(derived, t_s):
     return out
 
 
+def pose_at(derived, t_s):
+    """Ego position and heading at `t_s`, interpolated between samples.
+
+    `at_time` returns the nearest sample instead, and egomotion arrives at
+    10 Hz: up to 50 ms of error, which at the median 8.5 m/s is 0.43 m. It is
+    measurable -- transforming an object's own world coordinates back into the
+    ego frame at the moment it was observed should return the coordinates the
+    label already carries, and with nearest-sample poses it missed by a median
+    0.32 m. That is a third of the displacement error `plan_ego_xy` is scored
+    on, contributed by the reference rather than by the model, and the (x, y)
+    trajectory forms are scored in metres, so it goes straight into ADE.
+
+    Yaw is interpolated on the wrapped difference so a heading crossing +/-pi
+    does not swing the long way round.
+    """
+    t = derived["t"]
+    j = int(np.clip(np.searchsorted(t, t_s), 1, len(t) - 1))
+    t0, t1 = t[j - 1], t[j]
+    w = 0.0 if t1 <= t0 else float(np.clip((t_s - t0) / (t1 - t0), 0.0, 1.0))
+    xy = derived["xy"][j - 1] + w * (derived["xy"][j] - derived["xy"][j - 1])
+    y0, y1 = derived["yaw"][j - 1], derived["yaw"][j]
+    return xy, y0 + w * ((y1 - y0 + np.pi) % (2 * np.pi) - np.pi)
+
+
+NAV_DEG = 15.0        # heading change over the horizon that makes it a turn
+
+
+def nav_command(derived, t_s):
+    """LEFT, RIGHT or STRAIGHT over the next 3 s -- the route, not the path.
+
+    A real navigation command comes from a map and a destination. This release
+    carries neither: `labels/` holds egomotion and obstacles and nothing else,
+    so the only place to get one is the ego's own future heading -- the thing
+    `plan_ego` is asked to predict. That makes it a leak, and the size of the
+    leak was measured rather than assumed. Against a ridge regression that
+    already sees the speed and yaw rate the prompt carries, adding the command
+    improves ADE by 3.3% overall: 1.7% on the 86.6% of anchors that are
+    STRAIGHT, 8.1% on LEFT and 12.0% on RIGHT.
+
+    It is worth that 3.3% because without it the task is ill-posed. At an
+    intersection "where will the car go" has three right answers and the scene
+    does not say which, so an unconditioned model is trained to predict the
+    average of them -- a path it would never drive. Conditioning is also how a
+    planner is actually driven. What must not be forgotten is that an error
+    reported with the command given is "error once the intent is known", not
+    "error predicting where the car goes", and the two are different claims.
+
+    The finer `motion_intent` labels (STOP, CHANGE_LANE_*, TURN_*) are
+    deliberately not used as input. Measured the same way, knowing STOP halves
+    the error on those anchors -- 1.546 m to 0.777 m -- which is not a hint
+    about the route, it is most of the answer.
+    """
+    i, j = at_time(derived, t_s), at_time(derived, t_s + HORIZON_S[-1])
+    delta = np.degrees((derived["yaw"][j] - derived["yaw"][i] + np.pi)
+                       % (2 * np.pi) - np.pi)
+    return "LEFT" if delta > NAV_DEG else "RIGHT" if delta < -NAV_DEG else "STRAIGHT"
+
+
+def agent_offset(derived, t_s, hit):
+    """An agent's future position in the ego frame at `t_s`, forward-positive.
+
+    Not the frame the label is stored in. `obstacle.offline` gives a position
+    relative to the rig at the moment of observation, so `center_x` at t+3s
+    answers "where will it be relative to where I will then be" -- which cannot
+    be used without the ego's own future path, and is not what a trajectory
+    benchmark means by (x, y). Fixing the frame at `t_s` makes the answer
+    directly comparable to `plan_ego_xy`, whose offsets are in the same frame,
+    and it is the same transform `ego_waypoints` applies -- `wx`/`wy` are
+    already world coordinates, so only the ego pose at `t_s` is needed.
+    """
+    origin, yaw = pose_at(derived, t_s)
+    cos, sin = np.cos(yaw), np.sin(yaw)
+    dx, dy = hit.wx - origin[0], hit.wy - origin[1]
+    return cos * dx + sin * dy, -sin * dx + cos * dy
+
+
 def ego_waypoints(derived, t_s):
     """Future ego offsets in the ego frame at `t_s`, forward-positive."""
-    i = at_time(derived, t_s)
-    origin, yaw = derived["xy"][i], derived["yaw"][i]
+    origin, yaw = pose_at(derived, t_s)
     cos, sin = np.cos(yaw), np.sin(yaw)
     out = []
     for horizon in HORIZON_S:
         j = at_time(derived, t_s + horizon)
         if derived["t"][j] < t_s + horizon - 0.35:      # clip ends early
             return None
-        delta = derived["xy"][j] - origin
+        delta = pose_at(derived, t_s + horizon)[0] - origin
         out.append((cos * delta[0] + sin * delta[1],
                     -sin * delta[0] + cos * delta[1]))
     return out
@@ -474,9 +583,19 @@ def clip_items(clip_id, row, nvidia_root):
 
     items = []
 
-    def emit(task, frame, prompt, target):
+    def emit(task, frame, prompt, target, strat=""):
+        """`strat` names a subgroup the sampler may want to balance.
+
+        Some tasks have an answer distribution so lopsided that a model scores
+        well by ignoring the part of the prompt that distinguishes the cases --
+        88.2% of `plan_ego` anchors are STRAIGHT, so a model that never reads
+        the navigation command loses almost nothing. Writing the subgroup here
+        lets the loader balance exposure instead of deleting items: cutting to
+        1:1:1 would throw away 83% of the task, and the ratio could not be
+        changed without rebuilding this file.
+        """
         items.append({"clip_id": clip_id, "task": task, "frame": int(frame),
-                      "prompt": prompt, "target": target,
+                      "prompt": prompt, "target": target, "strat": strat,
                       "needs_radar": task in RADAR_EVIDENCE_TASKS})
 
     # 01 runs on its own instants. It asks what is ahead now, not what happens
@@ -694,20 +813,24 @@ def clip_items(clip_id, row, nvidia_root):
         rationale = (f"The ego vehicle is travelling at {speed:.1f} m/s and "
                      f"will {ego_action(derived, t_s)}. At that speed it covers "
                      f"about {speed:.0f} m per second.")
+        # The route the car is following. Stated first because it is a
+        # condition on the question, not a fact about the scene.
+        command = nav_command(derived, t_s)
+        asked_of = f"Navigation command: {command}. "
         forms = {
-            "xy": ("Predict the ego vehicle's path over the next 3 seconds as "
-                   "(x, y) offsets in metres.",
+            "xy": (asked_of + "Predict the ego vehicle's path over the next 3 "
+                   "seconds as (x, y) offsets in metres.",
                    "; ".join(f"+{h:.0f}s ({x:+.1f}, {y:+.1f})"
                              for h, (x, y) in zip(HORIZON_S, way))),
-            "control": ("Predict the ego vehicle's speed and yaw rate over the "
-                        "next 3 seconds.",
+            "control": (asked_of + "Predict the ego vehicle's speed and yaw "
+                        "rate over the next 3 seconds.",
                         "; ".join(f"+{h:.0f}s {v:.1f} m/s, yaw {w:+.1f} deg/s"
                                   for h, (v, w) in zip(HORIZON_S, controls))),
         }
         for form, (question, answer) in forms.items():
-            emit(f"plan_ego_{form}", seconds + 1, question, answer)
+            emit(f"plan_ego_{form}", seconds + 1, question, answer, command)
             emit(f"plan_ego_{form}_cot", seconds + 1, cot_prompt(question),
-                 json.dumps({"rationale": rationale, "answer": answer}))
+                 json.dumps({"rationale": rationale, "answer": answer}), command)
 
     # 03.2 -- one other object, forward in time. Two representations again:
     # where it will be in the world, and where it will appear in the image.
@@ -717,7 +840,7 @@ def clip_items(clip_id, row, nvidia_root):
     # 51.4% of the time, so "it will be gone" is the more common outcome after
     # two seconds and is a useful prediction in its own right; truncating the
     # list instead taught the model that a short answer is always safe.
-    for seconds in PLAN_ANCHOR_S:
+    for turn, seconds in enumerate(PLAN_ANCHOR_S):
         t_s = float(seconds)
         if t_s > derived["t"].max():
             break
@@ -728,7 +851,7 @@ def clip_items(clip_id, row, nvidia_root):
         movers = [r for r in listed.itertuples() if r.moved]
         if not movers:
             continue
-        agent = movers[0]
+        agent = pick_agent(movers, turn)
         scan = (radar_scan(radar, extrinsics, SENSOR_NAME[short], t_s, ego, derived)
                 if radar is not None and extrinsics is not None else None)
         evidence = object_evidence(scan, listed) if scan is not None else {}
@@ -771,15 +894,37 @@ def clip_items(clip_id, row, nvidia_root):
                         f"{round(box[1]/height*BBOX_SCALE)}, "
                         f"{round(box[2]/width*BBOX_SCALE)}, "
                         f"{round(box[3]/height*BBOX_SCALE)}]")
+                elif form == "xy":
+                    x, y = agent_offset(derived, t_s, hit)
+                    parts.append(f"+{horizon:.0f}s ({x:+.1f}, {y:+.1f})")
                 else:
                     parts.append(f"+{horizon:.0f}s {hit.range_m:.0f} m az "
                                  f"{hit.azimuth_deg:+.0f} deg")
             return "; ".join(parts)
 
-        asked = {"azdeg": "as range in metres and azimuth in degrees",
-                 "bbox": "as an image bounding box [x1, y1, x2, y2] normalised "
-                         "to 0-1000"}
-        seen_az = None
+        # Three ways to say where an object goes, and they do not share a
+        # frame -- so each instruction states its own, or the same question has
+        # two right answers and no way to tell which was wanted.
+        #
+        # `xy` is the form a trajectory benchmark means: metres in the ego
+        # frame at the moment of the question, the same frame `plan_ego_xy`
+        # uses, so an ego path and an agent path can be drawn on one picture
+        # and the error is a displacement in metres. `azdeg` and `bbox` are
+        # both relative to where the ego will be at each horizon -- a bearing
+        # and an image box have no other meaning -- which makes them the
+        # "where do I look" forms rather than the "where will it be" one.
+        #
+        # Polar is kept because it is what the radar measures, but it is a poor
+        # error metric on its own: five degrees of azimuth is 0.44 m at 5 m and
+        # 6.97 m at 80 m, so one `az_mae` covers answers that are a car's width
+        # apart and answers that are two lanes apart.
+        asked = {"azdeg": ("as range in metres and azimuth in degrees relative "
+                           "to the ego at that time"),
+                 "bbox": ("as an image bounding box [x1, y1, x2, y2] normalised "
+                          "to 0-1000"),
+                 "xy": ("as (x, y) offsets in metres from the ego's position "
+                        "now, x forward and y to the left")}
+        seen_az, now_box = None, None
         if camera is not None:
             rot, translation, model = camera
             box = image_bbox([agent.center_x, agent.center_y, agent.center_z],
@@ -790,6 +935,11 @@ def clip_items(clip_id, row, nvidia_root):
             if box:
                 seen_az = camera_azimuth(((box[0] + box[2]) / 2,
                                           (box[1] + box[3]) / 2), model, rot)
+                width, height = model["resolution"]
+                now_box = (f"[{round(box[0]/width*BBOX_SCALE)}, "
+                           f"{round(box[1]/height*BBOX_SCALE)}, "
+                           f"{round(box[2]/width*BBOX_SCALE)}, "
+                           f"{round(box[3]/height*BBOX_SCALE)}]")
         hit = evidence.get(agent.track_id)
         clauses = [f"#{int(agent.track_id)} {agent.label_class} is at "
                    f"{agent.range_m:.0f} m az {agent.azimuth_deg:+.0f} deg now"]
@@ -810,13 +960,26 @@ def clip_items(clip_id, row, nvidia_root):
             clauses.append("and it leaves the forward sector inside the horizon")
         rationale = ", ".join(clauses) + "."
 
+        # The question points at the object in the same terms the answer is
+        # asked for. It used to give a range and a bearing whatever the form,
+        # so an item whose answer is an image box opened by naming the object
+        # in metres -- the model had to convert polar coordinates into the
+        # image before it could even tell which object was meant, which is
+        # arithmetic the task is not about. Answering in (x, y) from a polar
+        # question had the same shape. Pointing at a box with a box is also
+        # what a perception stack actually hands a predictor.
+        now = {"azdeg": (f"at {agent.range_m:.0f} m, azimuth "
+                         f"{agent.azimuth_deg:+.0f} deg"),
+               "xy": "at ({:+.1f}, {:+.1f}) m".format(
+                   *agent_offset(derived, t_s, agent)),
+               "bbox": None if now_box is None else f"at {now_box}"}
+
         for form, how in asked.items():
             answer = render(form)
-            if not answer:
+            if not answer or now[form] is None:
                 continue
             question = (f"Track #{int(agent.track_id)} is a {agent.label_class} "
-                        f"at {agent.range_m:.0f} m, azimuth "
-                        f"{agent.azimuth_deg:+.0f} deg. Where will it be over "
+                        f"{now[form]}. Where will it be over "
                         f"the next 3 seconds? Answer {how}, or say "
                         f"'{LEAVES}' for a horizon it does not reach.")
             emit(f"agent_traj_{form}", seconds + 1, question, answer)

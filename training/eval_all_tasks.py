@@ -30,7 +30,7 @@ from training.task_scorers import scorer_for, summarise
 
 _PLAIN = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
           "track_step_bbox", "plan_ego_xy", "plan_ego_control",
-          "agent_traj_azdeg", "agent_traj_bbox",
+          "agent_traj_azdeg", "agent_traj_bbox", "agent_traj_xy",
           "motion_seg_azdeg", "motion_seg_bbox", "qa")
 
 # The CoT variants are half the training data and the reason the tasks were
@@ -50,6 +50,7 @@ MAX_NEW = {"det_objects_azdeg": 200, "det_objects_3dbbox": 240,
            "track_step_azdeg": 260, "track_step_bbox": 300,
            "motion_seg_azdeg": 280, "motion_seg_bbox": 320,
            "agent_traj_azdeg": 100, "agent_traj_bbox": 120,
+           "agent_traj_xy": 90,
            "plan_ego_xy": 80, "plan_ego_control": 110,
            "desc_radar": 120, "desc_complementarity": 120, "desc_objects": 120,
            "desc_ego_maneuver": 80, "desc_clip_summary": 160, "retrieval": 60,
