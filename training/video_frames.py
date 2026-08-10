@@ -59,6 +59,17 @@ def decode_keyframes(mp4_bytes, n_frames=N_FRAMES, width=FRAME_WIDTH,
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-threads", "1",
              "-skip_frame", "nokey", "-i", source,
+             # Without this every output frame is the same picture. Skipping
+             # to keyframes leaves timestamps one second apart, and an image
+             # sequence is written at the input's frame rate by default, so
+             # ffmpeg duplicates the first keyframe thirty times to fill the
+             # gap -- `-frames:v 20` then takes twenty copies of frame zero.
+             # It produced twenty files and no error, `pad_frames` had nothing
+             # to pad, and nothing downstream compared one frame to the next,
+             # so every model trained here was shown a still image twenty
+             # times over while being asked about instants up to nineteen
+             # seconds later.
+             "-fps_mode", "passthrough",
              "-vf", f"scale={width}:{height}",
              "-frames:v", str(n_frames), "-q:v", str(quality), pattern],
             capture_output=True, check=False)
@@ -69,6 +80,16 @@ def decode_keyframes(mp4_bytes, n_frames=N_FRAMES, width=FRAME_WIDTH,
         return frames
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def distinct_frames(frames):
+    """How many of the decoded frames differ from one another.
+
+    Cheap enough to assert on, and the one check that would have caught the
+    duplication above: everything else about a broken decode looks right --
+    the count, the size, the file type, even the picture itself.
+    """
+    return len({image.tobytes() for image in frames})
 
 
 def clip_frames(nvidia_root, row, **kwargs):

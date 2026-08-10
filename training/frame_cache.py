@@ -74,6 +74,9 @@ def keyframe_bytes(mp4_bytes, n_frames=N_FRAMES, width=FRAME_WIDTH,
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-threads", "1",
              "-skip_frame", "nokey", "-i", source,
+             # 없으면 같은 키프레임이 스무 번 복제된다 -- video_frames.py 의
+             # 같은 자리에 이유를 적어 두었다.
+             "-fps_mode", "passthrough",
              "-vf", f"scale={width}:{height}",
              "-frames:v", str(n_frames), "-q:v", str(quality), pattern],
             capture_output=True, check=False)
@@ -81,15 +84,21 @@ def keyframe_bytes(mp4_bytes, n_frames=N_FRAMES, width=FRAME_WIDTH,
         for path in sorted(glob.glob(os.path.join(workdir, "f_*.jpg"))):
             with open(path, "rb") as fh:
                 out.append(fh.read())
+        # 20 장이 전부 같은 그림인 채로 캐시가 통째로 만들어진 적이 있다.
+        # 장수도 크기도 형식도 옳아서 아무 데서도 걸리지 않았다. 프레임끼리
+        # 비교하는 것이 그 실패를 잡는 유일한 검사라, 여기서 한다.
+        if len(out) > 1 and len(set(out)) == 1:
+            raise RuntimeError("모든 키프레임이 동일합니다 -- "
+                               "-fps_mode passthrough 가 빠졌는지 확인하세요")
         return out
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
 def write_clip(args_tuple):
-    clip_id, row, nvidia_root = args_tuple
+    clip_id, row, nvidia_root, force = args_tuple
     path = cache_path(clip_id)
-    if os.path.exists(path):
+    if os.path.exists(path) and not force:
         return clip_id, 0
     try:
         with zipfile.ZipFile(os.path.join(nvidia_root, row["camera_zip"])) as zf:
@@ -141,6 +150,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--nvidia-root", default=paths.NVIDIA_ROOT)
     ap.add_argument("--workers", type=int, default=60)
+    # 캐시 전체가 잘못 만들어진 적이 있고, 그때 이미 있는 파일을 건너뛰는
+    # 규칙이 고친 코드를 무력화했다. 다시 만들 길을 열어 둔다.
+    ap.add_argument("--force", action="store_true",
+                    help="이미 있는 캐시도 다시 만든다")
     ap.add_argument("--check", type=int, default=0,
                     help="만들지 않고, 캐시와 mp4 디코딩 결과를 이만큼 대조")
     args = ap.parse_args(argv)
@@ -172,7 +185,7 @@ def main(argv=None):
         return 0 if same + missing == len(pick) else 1
 
     print(f"{len(usable):,} 클립 → {CACHE_DIR}", flush=True)
-    tasks = [(cid, usable.loc[cid].to_dict(), args.nvidia_root)
+    tasks = [(cid, usable.loc[cid].to_dict(), args.nvidia_root, args.force)
              for cid in usable.index]
     done = failed = 0
     total_bytes = 0
