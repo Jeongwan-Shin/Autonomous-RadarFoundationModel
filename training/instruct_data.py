@@ -48,6 +48,7 @@ import random
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
@@ -59,7 +60,8 @@ from training.connector import radar_prompt_block
 from training.radar_encoder import SENSOR_IDS
 from training.radar_data import RadarClipDataset
 from training import frame_cache
-from training.video_frames import clip_frames, pad_frames
+from training.video_frames import (FRAME_HEIGHT, FRAME_WIDTH,
+                                   clip_frames, pad_frames)
 
 N_FRAMES = 20
 RADAR_TOKENS = 256
@@ -109,6 +111,52 @@ for _t in ("plan_ego_xy", "plan_ego_control", "plan_ego_xy_cot",
            "motion_seg_azdeg_cot", "motion_seg_bbox_cot"):
     WINDOWS[_t] = (2, 10, 2)
 WINDOW_TASKS = frozenset(WINDOWS)
+
+# How large a frame each task is shown. Every task used 384x216, which the
+# processor rounds to 384x224 and turns into a 12x7 grid of vision tokens --
+# one token per 32x32 pixels, so one token spans 10 degrees of the 120 degree
+# field. A car is 10.3 deg wide at 10 m and 3.4 deg at 30 m, so beyond about
+# ten metres an object is a fraction of a single token, and 91.8% of labelled
+# objects are narrower than one. Asking for azimuth to a degree off a grid that
+# coarse is asking for something the representation cannot hold, and measured
+# on the trained model the generated |azimuth| averaged 6.6 deg against 27.4 in
+# the truth -- less than one token cell of spread.
+#
+# The budget was spent on frames rather than resolution, but the tasks that
+# need azimuth barely use frames. `det_objects` reads one frame and so spends
+# 84 of the 3,584 tokens; at 1152x648 it spends 720, a fifth of the budget, and
+# the grid becomes 3.3 deg. `track_step` reads five, so it stops at 768x432.
+# `qa` and the descriptions read all twenty and stay where they are.
+FRAME_SIZE = {}
+for _t in INSTANT_TASKS:                       # one frame: 84 -> 720 tokens
+    FRAME_SIZE[_t] = (1152, 648)
+    FRAME_SIZE[f"{_t}_cot"] = (1152, 648)
+for _t in ("plan_ego_xy", "plan_ego_control", "agent_traj_azdeg",
+           "agent_traj_bbox", "agent_traj_xy", "motion_seg_azdeg",
+           "motion_seg_bbox"):                 # two frames: 84 -> 720
+    FRAME_SIZE[_t] = (1152, 648)
+    FRAME_SIZE[f"{_t}_cot"] = (1152, 648)
+for _t in ("track_step_azdeg", "track_step_bbox"):   # five frames: 252 -> 1008
+    FRAME_SIZE[_t] = (768, 432)
+    FRAME_SIZE[f"{_t}_cot"] = (768, 432)
+DEFAULT_FRAME_SIZE = (384, 216)
+
+# Whatever the loops above decided, a task that reads all twenty frames stays
+# small. At 1152 that is 7,200 vision tokens against a 3,584 budget, and the
+# processor does not fail cleanly: the sequence is truncated and then the video
+# token count no longer matches the text, so training dies at the first batch
+# with a shape mismatch rather than at the table that caused it.
+for _t in list(FRAME_SIZE):
+    _n = 1 if _t in INSTANT_TASKS else (WINDOWS[_t][2] if _t in WINDOWS else 20)
+    if _n >= 20:
+        FRAME_SIZE[_t] = DEFAULT_FRAME_SIZE
+
+# The budget is checked here rather than discovered at the first step.
+_TOKENS = {(384, 216): 42, (768, 432): 168, (1152, 648): 360}   # per frame, 20-frame rate
+for _t, _sz in FRAME_SIZE.items():
+    _n = 1 if _t in INSTANT_TASKS else (WINDOWS[_t][2] if _t in WINDOWS else 20)
+    _v = _TOKENS[_sz] * max(_n, 2)      # temporal patching pairs frames
+    assert _v + 256 < 3200, f"{_t}: {_v} vision tokens leaves no room"
 
 RADAR_ONLY_TASKS = frozenset({
     "radar_probe", "radar_probe_coarse", "radar_transfer",
@@ -913,6 +961,14 @@ class InstructDataset(Dataset):
                                              self.clips.loc[clip_id]),
                                  self.n_frames)
             frames = [decoded[i] for i in wanted]
+
+        # The cache holds one size; each task is shown the size its token
+        # budget allows. Upscaling a 384-wide frame recovers nothing the
+        # decoder threw away, so the cache is built at the largest size any
+        # task asks for and every other task scales down from it.
+        want_size = FRAME_SIZE.get(item["task"], DEFAULT_FRAME_SIZE)
+        if frames and frames[0].size != want_size:
+            frames = [f.resize(want_size, Image.BILINEAR) for f in frames]
 
         points, mask = radar["points"], radar["mask"]
         present = self.radar_of.get(clip_id)

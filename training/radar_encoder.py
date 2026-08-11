@@ -120,7 +120,13 @@ SENSOR_IDS = {"lrr1": 0, "mrr2": 1, "srr0": 2, "none": 3}
 # Heads used only during pretraining. A checkpoint written before one of them
 # existed is still a valid encoder, so these may be missing on load; anything
 # else missing means the architecture genuinely disagrees.
-PRETRAIN_HEADS = ("head_moving", "head_class", "head_ego", "head_stats")
+PRETRAIN_HEADS = ("head_moving", "head_class", "head_ego", "head_stats",
+                  "head_bearing")
+
+# The bird's-eye occupancy grid the emitted tokens are asked to fill in:
+# twelve azimuth cells of 10 degrees by four range rings of 10 m. Defined in
+# `radar_data` alongside the target that fills it.
+OCC_CELLS = 12 * 4
 
 
 def encoder_kwargs(saved):
@@ -338,6 +344,20 @@ class RadarEncoder(nn.Module):
         # mixer and, under `global` readout, a random projection on top of it.
         self.head_stats = nn.Sequential(nn.LayerNorm(dim),
                                         nn.Linear(dim, len(STATISTICS)))
+        # Where the returns are, not just how many. Nothing in the other four
+        # objectives asks for that: `moving` is decided by a Doppler residual,
+        # `box_class` by rcs and local shape, `ego` and `stats` are per-frame
+        # scalars. Measured with a linear probe on the trained encoder,
+        # recovering the azimuth histogram of the returns -- a quantity
+        # computed directly from the input, so a perfect encoder scores 1.0 --
+        # gave R^2 0.717 from the point features and 0.517 from the tokens the
+        # language model receives. The bearing survives, but nothing had asked
+        # it to, and detection is exactly the task that needs it.
+        #
+        # The label costs nothing: it is a histogram of atan2(y, x) over the
+        # returns already in the batch.
+        self.head_bearing = nn.Sequential(nn.LayerNorm(dim),
+                                          nn.Linear(dim, OCC_CELLS))
 
         self.dim = dim
         self.frame_queries = frame_queries
@@ -456,7 +476,34 @@ class RadarEncoder(nn.Module):
             losses["ego"] = predicted.sum() * 0.0
 
         losses["stats"] = self._statistics_loss(out["tokens"], batch, has_points)
+        losses["bearing"] = self._bearing_loss(out["tokens"], batch, has_points)
         return out, losses
+
+    def _bearing_loss(self, tokens, batch, has_points):
+        """Make the emitted tokens say where the objects are.
+
+        Binary cross-entropy against a coarse bird's-eye occupancy grid -- did
+        a labelled road user fall in this azimuth cell at this range ring.
+
+        The first version of this asked for the bearing histogram of the
+        *returns*, which needed no label at all. It also taught nothing:
+        predicting the dataset-average histogram already costs 2.064 against a
+        floor of 2.019, because most returns are road and clutter and their
+        distribution barely moves between scenes. The objects do move -- the
+        same spread over their bearings is 1.264, twenty-seven times wider --
+        so the target is the objects.
+
+        Defined for both readouts, unlike `_statistics_loss`. `global` pools
+        the frame axis away, but "where are the road users over this window" is
+        still well posed, and it is the question detection asks.
+        """
+        occ = batch.get("occupancy")
+        if occ is None or not has_points.any():
+            return tokens.sum() * 0.0
+        # Over the window, so it matches what a pooled readout can answer.
+        target = (occ.sum(dim=1) > 0).to(torch.float32)
+        predicted = self.head_bearing(tokens.mean(dim=1)).float()
+        return F.binary_cross_entropy_with_logits(predicted, target)
 
     def _statistics_loss(self, tokens, batch, has_points):
         """Force the emitted tokens to retain per-frame radar statistics.

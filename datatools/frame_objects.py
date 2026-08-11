@@ -147,6 +147,22 @@ STATIONARY_M = 2.0
 BOX_MARGIN = 1.3
 MAX_LISTED = 8                   # objects per answer, nearest first
 
+# How far out the object-listing tasks look. The sector reaches 300 m and the
+# labels go with it, which made the answers a lie: measured over 720 anchors
+# there are a median 15 objects inside 300 m, the answer keeps the nearest
+# eight, and 71.4% of anchors therefore hit the cap. 69.5% of `det_objects`
+# answers held exactly eight objects, so "list every road user" was false four
+# times in five and the model learned to always write eight.
+#
+# The ones being dropped are also the ones nothing can see: the eight kept have
+# a median range of 41 m and the discarded ones 93 m, where a car is 3.5 pixels
+# wide in the 384-pixel frame the model is shown.
+#
+# At 40 m the cap binds on 21.9% of anchors instead of 71.4%, and the count
+# spreads out -- 12% empty, 12% one object, 11% two, 8% three -- so the number
+# of objects becomes something to read off the scene rather than a constant.
+LIST_MAX_RANGE_M = 40.0
+
 # Answers that cite radar evidence, and so may only be emitted for a clip that
 # actually carries a front radar.
 RADAR_EVIDENCE_TASKS = ("depth_range", "motion_seg", "motion_seg_cot",
@@ -240,13 +256,19 @@ def boxes_world(obstacle, ego):
     return frame
 
 
-def visible_at(boxes, t_s):
-    """One row per track near `t_s`, inside the forward sector, nearest first."""
+def visible_at(boxes, t_s, max_range=None):
+    """One row per track near `t_s`, inside the forward sector, nearest first.
+
+    `max_range` overrides the sector's own 300 m for the tasks that list
+    objects -- see `LIST_MAX_RANGE_M`. The default is left alone so the
+    description and scene-feature callers keep the range they were measured on.
+    """
     if boxes is None:
         return None
+    limit = paths.FRONT_MAX_RANGE_M if max_range is None else max_range
     near = boxes[(boxes["t_s"] - t_s).abs() <= BOX_TIME_WINDOW_S]
     near = near[(near["azimuth_deg"].abs() <= paths.FRONT_FOV_DEG)
-                & (near["range_m"] <= paths.FRONT_MAX_RANGE_M)]
+                & (near["range_m"] <= limit)]
     if near.empty:
         return near
     # Closest observation in time wins, so range/azimuth are not up to a frame
@@ -606,7 +628,7 @@ def clip_items(clip_id, row, nvidia_root):
         t_s = float(seconds)
         if t_s > derived["t"].max():
             break
-        here = visible_at(boxes, t_s)
+        here = visible_at(boxes, t_s, LIST_MAX_RANGE_M)
         listed = None if here is None or here.empty else here.head(MAX_LISTED)
         scan = (radar_scan(radar, extrinsics, SENSOR_NAME[short], t_s, ego, derived)
                 if radar is not None and extrinsics is not None else None)
@@ -617,8 +639,14 @@ def clip_items(clip_id, row, nvidia_root):
                        for k, v in evidence.items()}
         camera = camera_model(clip_id, row, nvidia_root)
         frame = seconds + 1                      # 1-indexed, t = frame - 1
-        question = ("List every road user in the forward sector with its class, "
-                    "range and azimuth.")
+        # The instruction states the rule the answer actually follows. It used
+        # to say "every road user in the forward sector" while the answer held
+        # the nearest eight inside 300 m -- false on 71.4% of anchors, and the
+        # model learned to write eight objects whatever it saw. Naming the
+        # range and the cap makes the answer decidable from the question.
+        question = (f"List the road users within {LIST_MAX_RANGE_M:.0f} m ahead, "
+                    f"nearest first, up to {MAX_LISTED}, with class, range and "
+                    f"azimuth.")
         if listed is None:
             answer = "No road users in the forward sector."
         else:
@@ -626,11 +654,12 @@ def clip_items(clip_id, row, nvidia_root):
                                for r in listed.itertuples())
         emit("det_objects_azdeg", frame, question, answer)
 
-        question_xyz = ("List every road user in the forward sector as a 3D "
-                        "box: class, centre (x, y, z) in metres with x "
-                        "forward, y left and z up, then size as "
-                        "length x width x height in metres, then yaw in "
-                        "degrees, positive to the left of the ego heading.")
+        question_xyz = (f"List the road users within {LIST_MAX_RANGE_M:.0f} m "
+                        f"ahead, nearest first, up to {MAX_LISTED}, as a 3D "
+                        f"box: class, centre (x, y, z) in metres with x "
+                        f"forward, y left and z up, then size as "
+                        f"length x width x height in metres, then yaw in "
+                        f"degrees, positive to the left of the ego heading.")
         if listed is None:
             answer_xyz = "No road users in the forward sector."
         else:
@@ -678,18 +707,9 @@ def clip_items(clip_id, row, nvidia_root):
                 emit("det_objects_3dbbox_cot", frame, cot_prompt(question_xyz),
                      json.dumps({"rationale": rationale, "answer": answer_xyz}))
 
-    for frame in ANCHOR_FRAMES:
-        t_s = float(frame - 1)
-        if t_s > derived["t"].max():
-            break
-        here = visible_at(boxes, t_s)
-        scan = (radar_scan(radar, extrinsics, SENSOR_NAME[short], t_s, ego, derived)
-                if radar is not None and extrinsics is not None else None)
-        hits = radar_hits(scan, here if here is None or here.empty else here.head(24))
-
-        listed = None if here is None or here.empty else here.head(MAX_LISTED)
-
-        waypoints = ego_waypoints(derived, t_s)
+    # (the ANCHOR_FRAMES loop that stood here fed tasks 04 and 05, which are
+    # held back from this build. It emitted nothing and still ran a radar scan
+    # and a hit test three times per clip.)
 
     # 06 -- moving or stationary, decided from two perpendicular residuals.
     # 06.1 azdeg names objects in the world, 06.2 bbox in the image.
@@ -699,14 +719,14 @@ def clip_items(clip_id, row, nvidia_root):
         t_s = float(seconds)
         if t_s > derived["t"].max():
             break
-        here = visible_at(boxes, t_s)
+        here = visible_at(boxes, t_s, LIST_MAX_RANGE_M)
         if here is None or here.empty:
             continue
         listed = here.head(MAX_LISTED)
         scan = (radar_scan(radar, extrinsics, SENSOR_NAME[short], t_s, ego, derived)
                 if radar is not None and extrinsics is not None else None)
         evidence = object_evidence(scan, listed) if scan is not None else {}
-        earlier = visible_at(boxes, t_s - 1.0)
+        earlier = visible_at(boxes, t_s - 1.0, LIST_MAX_RANGE_M)
         was = ({r.track_id: r for r in earlier.itertuples()}
                if earlier is not None and not earlier.empty else {})
 
@@ -785,9 +805,10 @@ def clip_items(clip_id, row, nvidia_root):
             how = ("as range in metres and azimuth in degrees" if form == "azdeg"
                    else "as an image bounding box [x1, y1, x2, y2] normalised "
                         "to 0-1000")
-            question = (f"Which objects ahead are moving and which are "
-                        f"stationary? Use the radar Doppler and the camera. "
-                        f"Identify each {how}.")
+            question = (f"Which of the road users within "
+                        f"{LIST_MAX_RANGE_M:.0f} m ahead are moving and which "
+                        f"are stationary? Use the radar Doppler and the "
+                        f"camera. Identify each {how}.")
             answer = f"moving: {a}. stationary: {b_}."
             emit(f"motion_seg_{form}", seconds + 1, question, answer)
             emit(f"motion_seg_{form}_cot", seconds + 1, cot_prompt(question),
@@ -844,7 +865,7 @@ def clip_items(clip_id, row, nvidia_root):
         t_s = float(seconds)
         if t_s > derived["t"].max():
             break
-        here = visible_at(boxes, t_s)
+        here = visible_at(boxes, t_s, LIST_MAX_RANGE_M)
         if here is None or here.empty:
             continue
         listed = here.head(MAX_LISTED)
@@ -859,7 +880,7 @@ def clip_items(clip_id, row, nvidia_root):
 
         future, gone = [], False
         for horizon in HORIZON_S:
-            later = visible_at(boxes, t_s + horizon)
+            later = visible_at(boxes, t_s + horizon, LIST_MAX_RANGE_M)
             match = (None if later is None or later.empty
                      else later[later["track_id"] == agent.track_id])
             if match is None or match.empty:
@@ -1181,7 +1202,7 @@ def step_frame(boxes, t_s, ids, camera=None, limit=MAX_LISTED, scan=None):
     Two output formats exist for the same instant -- range/azimuth and an image
     box -- so the geometry is computed once and each format reads what it needs.
     """
-    here = visible_at(boxes, t_s)
+    here = visible_at(boxes, t_s, LIST_MAX_RANGE_M)
     if here is None or here.empty:
         return []
     listed = here.head(limit)

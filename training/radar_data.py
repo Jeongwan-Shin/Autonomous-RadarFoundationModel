@@ -67,6 +67,27 @@ CLASS_INDEX = {name: i for i, name in enumerate(CLASSES)}
 # radial velocity +/-28 m/s.
 NORMALISE = np.array([50.0, 50.0, 100.0, 15.0, 5.0, 20.0], dtype=np.float32)
 
+# The encoder's bearing objective takes atan2(y, x) straight off the normalised
+# tensor, which is only the same angle while these two scales are equal.
+assert NORMALISE[CHANNELS.index("x")] == NORMALISE[CHANNELS.index("y")]
+
+# Where the labelled objects are, as a coarse bird's-eye grid the encoder is
+# asked to fill in. This is the pretraining target that carries position.
+#
+# The first attempt asked for the bearing histogram of the *returns*, which
+# needs no label at all -- and turned out to teach almost nothing: measured
+# over 60 clips, predicting the dataset-average histogram already costs 2.064
+# against a floor of 2.019, a spread of 0.046. Most returns are road, kerb and
+# clutter, so the distribution barely moves between scenes. The objects do
+# move: the same measurement over their bearings gives 2.308 against 1.044, a
+# spread of 1.264, twenty-seven times wider.
+#
+# Twelve azimuth cells of 10 degrees over the sector and four range rings of
+# 10 m out to 40 m -- the same 40 m the listing tasks now use. Mean occupancy
+# is 0.094, so the grid is sparse enough to be a real question.
+OCC_AZ_BINS, OCC_RANGE_BINS = 12, 4
+OCC_MAX_RANGE_M = 40.0
+
 MOVING_THRESHOLD_MS = 1.0
 BOX_MARGIN = 1.3
 BOX_TIME_WINDOW_S = 0.12      # a 0.6 s stale box is 6 m out of place at 10 m/s
@@ -206,6 +227,7 @@ class RadarClipDataset(Dataset):
         mask = np.zeros((F, P), dtype=bool)
         moving = np.zeros((F, P), dtype=np.int64)
         box_class = np.full((F, P), -1, dtype=np.int64)   # -1 = not in any box
+        occupancy = np.zeros((F, OCC_AZ_BINS * OCC_RANGE_BINS), dtype=np.float32)
         ego_state = np.zeros((F, 3), dtype=np.float32)    # speed, accel, yaw rate
 
         speed = np.linalg.norm(ego_v, axis=1)
@@ -292,6 +314,18 @@ class RadarClipDataset(Dataset):
                     if inside.any():
                         box_class[f, :n][inside] = CLASS_INDEX.get(
                             box.label_class, len(CLASSES))
+                    # Every labelled object in the sector marks its cell,
+                    # whether or not the radar happens to illuminate it -- the
+                    # question is where things are, not where the returns are.
+                    rng_b = float(np.hypot(box.center_x, box.center_y))
+                    az_b = float(np.degrees(np.arctan2(box.center_y,
+                                                       box.center_x)))
+                    if rng_b < OCC_MAX_RANGE_M and abs(az_b) < 60.0:
+                        ai = min(int((az_b + 60.0) / (120.0 / OCC_AZ_BINS)),
+                                 OCC_AZ_BINS - 1)
+                        ri = min(int(rng_b / (OCC_MAX_RANGE_M / OCC_RANGE_BINS)),
+                                 OCC_RANGE_BINS - 1)
+                        occupancy[f, ri * OCC_AZ_BINS + ai] = 1.0
 
         if self.thin_to is not None:
             self._thin(mask, i)
@@ -301,6 +335,7 @@ class RadarClipDataset(Dataset):
                 "mask": torch.from_numpy(mask),
                 "is_moving": torch.from_numpy(moving),
                 "box_class": torch.from_numpy(box_class),
+                "occupancy": torch.from_numpy(occupancy),
                 "ego_state": torch.from_numpy(ego_state),
                 # Which sensor these points came from, for the routed experts.
                 # A clip whose radar could not be read is `none`, not `lrr1`.
@@ -314,13 +349,14 @@ class RadarClipDataset(Dataset):
                 "mask": torch.zeros(F, P, dtype=torch.bool),
                 "is_moving": torch.zeros(F, P, dtype=torch.long),
                 "box_class": torch.full((F, P), -1, dtype=torch.long),
+                "occupancy": torch.zeros(F, OCC_AZ_BINS * OCC_RANGE_BINS),
                 "ego_state": torch.zeros(F, 3),
                 "sensor": torch.tensor(SENSOR_IDS["none"])}
 
 
 def collate(batch):
     out = {"clip_id": [b["clip_id"] for b in batch]}
-    for key in ("points", "mask", "is_moving", "box_class", "ego_state",
-                "sensor"):
+    for key in ("points", "mask", "is_moving", "box_class", "occupancy",
+                "ego_state", "sensor"):
         out[key] = torch.stack([b[key] for b in batch])
     return out

@@ -50,7 +50,12 @@ from training.radar_encoder import RadarEncoder
 # `per_point` and `frame_tokens` -- so the encoder shipped a random temporal
 # mixer, and a linear probe recovered a frame's detection count from its output
 # at R^2 0.31 against 0.97 from the raw points.
-LOSS_WEIGHTS = {"moving": 1.0, "box_class": 0.5, "ego": 0.1, "stats": 1.0}
+LOSS_WEIGHTS = {"moving": 1.0, "box_class": 0.5, "ego": 0.1, "stats": 1.0,
+                # The one objective that asks the emitted tokens where things
+                # are. Weighted with `moving` because the detection tasks stand
+                # on it -- a linear probe recovered the bearing histogram from
+                # those tokens at only R^2 0.517 when nothing asked for it.
+                "bearing": 1.0}
 
 
 def is_distributed():
@@ -110,7 +115,8 @@ def evaluate(model, loader, device, max_batches=20):
     model.eval()
     totals = {"moving_correct": 0, "moving_total": 0,
               "box_correct": 0, "box_total": 0, "ego_mae": 0.0, "ego_n": 0,
-              "stats_loss": 0.0, "stats_n": 0}
+              "stats_loss": 0.0, "stats_n": 0,
+              "bearing_loss": 0.0, "bearing_n": 0}
     for i, batch in enumerate(loader):
         if i >= max_batches:
             break
@@ -147,10 +153,18 @@ def evaluate(model, loader, device, max_batches=20):
         # the number to watch: it is the only metric computed from what the
         # language model is handed rather than from an intermediate.
         gpu_batch = {"points": points, "mask": mask,
-                     "is_moving": batch["is_moving"].to(device)}
+                     "is_moving": batch["is_moving"].to(device),
+                     "occupancy": batch["occupancy"].to(device)}
         stats = head._statistics_loss(out["tokens"], gpu_batch, has_points)
         totals["stats_loss"] += float(stats)
         totals["stats_n"] += 1
+        # Binary cross-entropy against the occupancy grid. Predicting the
+        # marginal occupancy of every cell costs 14.18 nats summed, 0.295 per
+        # cell; anything well under that is the tokens carrying where the road
+        # users are.
+        totals["bearing_loss"] += float(
+            head._bearing_loss(out["tokens"], gpu_batch, has_points))
+        totals["bearing_n"] += 1
     model.train()
     return {
         "moving_acc": totals["moving_correct"] / max(totals["moving_total"], 1),
@@ -158,6 +172,7 @@ def evaluate(model, loader, device, max_batches=20):
         "box_n": totals["box_total"],
         "ego_mae": totals["ego_mae"] / max(totals["ego_n"], 1),
         "stats_loss": totals["stats_loss"] / max(totals["stats_n"], 1),
+        "bearing_loss": totals["bearing_loss"] / max(totals["bearing_n"], 1),
     }
 
 
@@ -261,6 +276,7 @@ def main(argv=None):
                    "mask": batch["mask"].to(device, non_blocking=True),
                    "is_moving": batch["is_moving"].to(device, non_blocking=True),
                    "box_class": batch["box_class"].to(device, non_blocking=True),
+                   "occupancy": batch["occupancy"].to(device, non_blocking=True),
                    "ego_state": batch["ego_state"].to(device, torch.bfloat16,
                                                       non_blocking=True)}
             inner = model.module if hasattr(model, "module") else model
@@ -293,7 +309,8 @@ def main(argv=None):
             log(rank, f"epoch {epoch}: moving acc {metrics['moving_acc']*100:.1f}%  "
                       f"box acc {metrics['box_acc']*100:.1f}% (n={metrics['box_n']:,})  "
                       f"ego MAE {metrics['ego_mae']:.3f}  "
-                      f"stats {metrics['stats_loss']:.4f}")
+                      f"stats {metrics['stats_loss']:.4f}  "
+                  f"bearing {metrics['bearing_loss']:.4f}")
             inner = model.module if hasattr(model, "module") else model
             torch.save({"model": inner.state_dict(), "args": vars(args),
                         "epoch": epoch, "history": history},
@@ -304,7 +321,8 @@ def main(argv=None):
         log(rank, f"final: moving acc {metrics['moving_acc']*100:.1f}%  "
                   f"box acc {metrics['box_acc']*100:.1f}%  "
                   f"ego MAE {metrics['ego_mae']:.3f}  "
-                  f"stats {metrics['stats_loss']:.4f}")
+                  f"stats {metrics['stats_loss']:.4f}  "
+                  f"bearing {metrics['bearing_loss']:.4f}")
         history.append({"epoch": "final", "step": step, **metrics})
         with open(os.path.join(args.out, "history.json"), "w") as fh:
             json.dump(history, fh, indent=2)

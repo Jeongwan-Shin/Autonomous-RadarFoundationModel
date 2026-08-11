@@ -12,10 +12,18 @@ one gives exactly 21 I-frames at t = 0, 1, 2 ... 20 s. The keyframes *are* the
 only what we keep. That is 0.17 s per clip, 151.9 clip/s across 48 processes --
 a 26x speedup that turns a required preprocessing stage into a dataloader call.
 
-Frames come out at 384x216, chosen against the Qwen3-VL vision tower: patch 16
-with spatial_merge 2 gives (384/16 x 216/16) / 4 = 78 tokens per frame, so 20
-frames cost 1,560 tokens. Downscale in the processor for a tighter budget --
-320x180 gives 55 tokens per frame and 320x180x20 = 1,100 total.
+Frames come out at 1152x648. The size is set by the coarsest thing the model
+has to report: azimuth. The tower has patch 16 and spatial_merge 2, so one
+vision token covers 32x32 pixels; at 384 wide that is 10.0 degrees of the 120
+degree field, and a car is 3.4 degrees at 30 m -- a third of one token, with
+91.8% of labelled objects narrower than a single cell. At 1152 a token is 3.3
+degrees and that same car fills one.
+
+Measured token counts, which the temporal patching halves for long windows:
+1 frame 720, 5 frames 2,160, 20 frames 7,200. So the cache is built here at the
+largest size and `instruct_data.FRAME_SIZE` scales each task down to what its
+budget allows -- one- and two-frame tasks keep 1152, `track_step` drops to 768,
+and the twenty-frame tasks go back to 384.
 
     python -m training.video_frames --check 20
 """
@@ -36,8 +44,15 @@ from PIL import Image
 
 from datatools import paths
 
-FRAME_WIDTH = 384
-FRAME_HEIGHT = 216
+# The cache is built at the largest size any task asks for and every other
+# task scales down from it -- upscaling a 384-wide frame recovers nothing the
+# decoder threw away. See `instruct_data.FRAME_SIZE` for who gets what.
+#
+# 1152x648 makes one vision token 3.3 degrees of the 120 degree field instead
+# of 10.0, which is the difference between a car at 30 m covering a third of a
+# token and covering a whole one.
+FRAME_WIDTH = 1152
+FRAME_HEIGHT = 648
 N_FRAMES = 20
 JPEG_QUALITY = 4          # ffmpeg -q:v, lower is better; 4 is visually clean
 
