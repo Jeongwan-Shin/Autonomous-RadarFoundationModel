@@ -29,7 +29,7 @@ data/
 ```
 
 아이템은 프레임을 **번호로** 가리킵니다(`"frames": [1, 2, 3, 4, 5]`). 같은
-프레임이 스무 번 복사되지 않으므로 번들이 1.4 GB 에서 **92 MB** 로 줄었습니다.
+프레임이 스무 번 복사되지 않으므로 번들이 1.4 GB 에서 **78 MB** 로 줄었습니다.
 
 한 클립 안에서 태스크가 무엇을 묻는지 이렇게 보입니다:
 
@@ -60,12 +60,17 @@ python export_items.py --clips 200        # 원본 서버에서만 돌아갑니�
 
 **https://drive.google.com/drive/folders/1zKflCPWc3kIL8W9qjhr5npqkNQenO_Bw**
 
-| 파일 | 크기 | 무엇 |
-|---|---|---|
-| `model_8b_v4_step8100.tar.gz` | 14 GB | 학습된 체크포인트 |
-| `data_10clips.tar.gz` | 60 MB | 클립 10개 · 아이템 3,410건 |
+| 파일 | 크기 | md5 | 무엇 |
+|---|---|---|---|
+| `model_8b_v9_6ch_step2200.tar.gz` | 14.0 GB | `268d6f23…` | 체크포인트 (step 2,200) |
+| `data_10clips.tar.gz` | 49.7 MB | `4aa3a118…` | 클립 10개 · 아이템 3,410건 |
 
-`data/` 는 92 MB 로 줄었지만(전에는 1.4 GB) 아직 저장소에는 넣지 않았습니다 —
+**둘은 짝입니다. 섞어 쓰면 안 됩니다.** 예전에 올라가 있던
+`model_8b_v4_step8100.tar.gz` 는 레이더를 8 채널로 읽고, 지금 `data/` 는 6
+채널로 나갑니다 — 형상이 맞지 않아 죽거나, 더 나쁘게는 채널이 어긋난 채로
+돌아갑니다. 그 체크포인트는 프레임 결함(아래) 이전 것이기도 합니다.
+
+`data/` 는 78 MB 로 줄었지만(처음에는 1.4 GB) 저장소에는 넣지 않았습니다 —
 깃 히스토리에 들어가면 되돌리기 어려워서입니다. 원본 서버에서는 직접 만들 수도
 있습니다:
 
@@ -81,10 +86,10 @@ python export_items.py --clips 10
 
 ```bash
 pip install -r requirements.txt        # torch 는 requirements.txt 주석 참고
-tar xzf data_10clips.tar.gz            # → data/
-tar xzf model_8b_v4_step8100.tar.gz    # → vlm_8B_v4_step8100_20260809/
-python verify_bundle.py                # 모델 없이 초 단위로 끝납니다
-python run_eval.py
+tar xzf data_10clips.tar.gz                # → data/
+tar xzf model_8b_v9_6ch_step2200.tar.gz    # → vlm_8B_v9_6ch_step2200/
+python verify_bundle.py                    # 모델 없이 초 단위로 끝납니다
+python run_eval.py --checkpoint ./vlm_8B_v9_6ch_step2200
 ```
 
 GPU 한 장, bf16 으로 약 20 GiB 를 씁니다. 일부만 빠르게 보려면:

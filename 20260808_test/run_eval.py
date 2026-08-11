@@ -7,7 +7,7 @@
 
 체크포인트를 풀어 두면 인자 없이 돈다.
 
-    tar xzf model_8b_v4_step8100.tar.gz
+    tar xzf model_8b_v9_6ch_step2200.tar.gz
     python run_eval.py
 
 가중치는 체크포인트 것을 쓰고, 토크나이저와 프로세서 설정만 `base/` 에서
@@ -226,7 +226,7 @@ def main(argv=None):
     ap.add_argument("--base", default=os.path.join(HERE, "base"),
                     help="토크나이저·프로세서 설정 폴더 (기본: 번들의 base/)")
     ap.add_argument("--checkpoint",
-                    default=os.path.join(HERE, "vlm_8B_v4_step8100_20260809"))
+                    default=os.path.join(HERE, "vlm_8B_v9_6ch_step2200"))
     ap.add_argument("--data", default=os.path.join(HERE, "data"))
     ap.add_argument("--out", default=os.path.join(HERE, "results"))
     ap.add_argument("--tasks", default="all")
