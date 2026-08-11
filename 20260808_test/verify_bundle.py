@@ -40,6 +40,20 @@ def main(argv=None):
     if len(lits) != 2503:
         bad.append(f"숫자 어휘가 {len(lits)} (학습 때는 2,503)")
 
+    # 생성 길이 상한이 태스크마다 있어야 한다. 빠진 이름은 짧은 기본값 48 을
+    # 받아 답이 잘리는데, 그 실패는 "못 푸는 모델" 과 구별되지 않는다.
+    from ravl.eval_config import MAX_NEW
+    manifest_peek = json.load(open(os.path.join(data, "manifest.json")))
+    missing = [t for t in manifest_peek["tasks"]
+               if t not in MAX_NEW and not t.endswith("_cot")]
+    missing += [t for t in manifest_peek["tasks"]
+                if t.endswith("_cot") and t[:-4] not in MAX_NEW]
+    if missing:
+        bad.append(f"MAX_NEW 에 없는 태스크 {len(missing)}종: "
+                   f"{', '.join(sorted(set(missing))[:6])} -- 48 토큰에서 잘립니다")
+    else:
+        print(f"생성 길이 상한 {len(MAX_NEW)}종 · 번들의 태스크를 모두 덮음")
+
     # 2. 아이템이 다 있고, 파일이 실제로 열리는가
     manifest = json.load(open(os.path.join(data, "manifest.json")))
     print(f"매니페스트: {manifest['split']} 분할, 클립 {manifest.get('n_clips','?')}개, "

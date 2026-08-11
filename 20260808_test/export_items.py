@@ -54,6 +54,31 @@ VOCAB_FIX = (
     '                          "number_vocab.txt")')
 
 
+def write_eval_config(max_new, system):
+    """MAX_NEW 와 SYSTEM 을 저장소의 살아 있는 값에서 받아 적는다.
+
+    번들이 자기 사본을 들고 있었더니 어긋났다. `agent_traj_xy` 가 표에 없어
+    기본값 48 을 받았고, 그러면 `agent_traj_xy_cot` 도 파생되지 않아 근거까지
+    써야 하는 답이 48 토큰에서 잘린다 -- 그 실패는 "못 푸는 모델" 과 똑같이
+    보인다. 빌드마다 다시 쓰므로 이제 어긋날 자리가 없다.
+    """
+    body = [
+        "# 자동 생성 -- export_items.py 가 빌드할 때마다 다시 쓴다. 손대지 말 것.",
+        "",
+        f"SYSTEM = {system!r}",
+        "",
+        "MAX_NEW = {",
+    ]
+    for k in sorted(max_new):
+        body.append(f"    {k!r}: {max_new[k]},")
+    body += ["}", ""]
+    path = os.path.join(HERE, "ravl", "eval_config.py")
+    text = "\n".join(body)
+    if not os.path.exists(path) or open(path).read() != text:
+        open(path, "w").write(text)
+        log(f"  사본 갱신 ravl/eval_config.py ({len(max_new)}개 태스크)")
+
+
 def sync_modules():
     out = os.path.join(HERE, "ravl")
     for name, rel in COPIES.items():
@@ -95,6 +120,9 @@ def main(argv=None):
     from training.train_vlm import MODEL_DIR
 
     sync_modules()
+    from training.eval_all_tasks import MAX_NEW
+    from training.instruct_data import SYSTEM
+    write_eval_config(MAX_NEW, SYSTEM)
 
     md = MODEL_DIR["8B"]
     tok = AutoTokenizer.from_pretrained(md)

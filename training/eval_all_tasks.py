@@ -54,6 +54,10 @@ MAX_NEW = {"det_objects_azdeg": 200, "det_objects_3dbbox": 240,
            "plan_ego_xy": 80, "plan_ego_control": 110,
            "desc_radar": 120, "desc_complementarity": 120, "desc_objects": 120,
            "desc_ego_maneuver": 80, "desc_clip_summary": 160, "retrieval": 60,
+           # One number each. Listed rather than left to the default so the
+           # table covers every task the evaluator runs -- `verify_bundle.py`
+           # checks exactly that, and these two were the gap it found.
+           "radar_probe": 48, "radar_transfer": 48,
            "qa": 8}
 
 # A CoT answer is the plain answer with the reason in front of it, and the

@@ -35,26 +35,16 @@ sys.path.insert(0, HERE)
 
 from ravl.task_scorers import scorer_for, split_rationale, summarise
 
-# 태스크마다 답이 얼마나 길어야 하는가. 빠진 이름은 짧은 기본값을 받고 답이
-# 잘리는데, 그 실패는 "못 푸는 모델" 과 똑같이 보인다.
-MAX_NEW = {"det_objects_azdeg": 200, "det_objects_3dbbox": 300,
-           "track_step_azdeg": 260, "track_step_bbox": 300,
-           "motion_seg_azdeg": 280, "motion_seg_bbox": 320,
-           "agent_traj_azdeg": 100, "agent_traj_bbox": 120,
-           "plan_ego_xy": 80, "plan_ego_control": 110,
-           "desc_radar": 120, "desc_complementarity": 120, "desc_objects": 120,
-           "desc_ego_maneuver": 80, "desc_clip_summary": 160,
-           "radar_probe": 48, "radar_transfer": 48, "qa": 8}
+# 이 두 표는 저장소의 살아 있는 값에서 생성된다 -- `export_items.py` 가
+# 빌드할 때마다 `ravl/eval_config.py` 를 다시 쓴다. 번들이 자기 사본을 들고
+# 있었더니 어긋났다: `agent_traj_xy` 가 표에 없어 기본값 48 을 받았고, 그러면
+# `agent_traj_xy_cot` 도 파생되지 않아 근거까지 써야 하는 답이 48 토큰에서
+# 잘린다. 그 실패는 "못 푸는 모델" 과 똑같이 보인다.
+from ravl.eval_config import MAX_NEW, SYSTEM
+
+# CoT 는 근거를 먼저 쓰므로 평문의 +640 토큰을 받는다.
 for _p, _b in list(MAX_NEW.items()):
     MAX_NEW.setdefault(f"{_p}_cot", _b + 640)
-
-SYSTEM = ("You are a driving-scene assistant. You receive 20 video frames at 1 Hz, "
-          "a matching sequence of forward-radar observations, and the ego "
-          "vehicle's own motion. Answer from what the sensors show. Range is in "
-          "metres and azimuth in degrees, positive to the left of the ego "
-          "heading. A line stating which sensors are present precedes every "
-          "question; if a sensor is absent, do not report what it would have "
-          "seen.")
 
 
 def log(msg):
