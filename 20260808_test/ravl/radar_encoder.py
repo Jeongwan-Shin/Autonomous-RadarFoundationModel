@@ -56,9 +56,53 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-N_CHANNELS = 8
+# Taken from radar_data rather than restated, because the two drifted apart
+# once already: the geometry channels below were written as the fixed indices
+# [0, 1, 2, 7] of the old eight-channel layout, and dropping to six turned
+# index 7 into an out-of-bounds read. Naming the channels makes a rename or a
+# reorder a loud failure instead of a silent one.
+# The channels both this rig and nuScenes can produce, so an encoder trained
+# here can be tested there without the input representation changing.
+#
+# Dropped from the original eight:
+#   z    nuScenes' ARS408 is a 2D radar -- measured over 49,599 returns, z is
+#        0.000 for every one of them. Ours carries a real height (median
+#        1.57 m), so keeping it would be a channel that says which dataset a
+#        sample came from.
+#   snr  ARS408 does not report it. It is not redundant here -- rcs and range
+#        explain only R^2 0.471 of it, rcs alone 0.145 -- so this is a real
+#        loss, taken deliberately in exchange for a transferable encoder.
+#
+# `range` is kept although it is exactly hypot(x, y) -- verified to 0.000 m
+# over 630,693 returns. It costs one channel and saves a point-wise encoder
+# from having to build a non-linear function of two inputs in its first layer,
+# and both datasets compute it identically.
+CHANNELS = ("x", "y", "range", "radial_velocity", "doppler_residual", "rcs")
+
+_CHANNELS = CHANNELS
+N_CHANNELS = len(_CHANNELS)
+
+# What the sinusoidal expansion is applied to: the channels that are positions
+# in metres. Doppler and rcs are not, and expanding them at eight octaves would
+# spend the same capacity on quantities that need none.
+GEOMETRY_CHANNELS = tuple(c for c in ("x", "y", "z", "range") if c in _CHANNELS)
+GEOMETRY_INDEX = [_CHANNELS.index(c) for c in GEOMETRY_CHANNELS]
 N_CLASSES = 12          # 11 named classes plus an "other" bucket
-GEOMETRY_DIMS = 4       # x, y, z, range get Fourier features
+GEOMETRY_DIMS = len(GEOMETRY_CHANNELS)
+
+# `nn.MultiheadAttention` has a fused inference path that reads out of bounds
+# here. It is size-dependent, not data-dependent: the same sixteen validation
+# clips pass at batch 8 and abort the CUDA context at batch 16, with no NaN, no
+# infinity and no fully-padded row in the input. Measured on torch
+# 2.10.0a0+b4e4ee81d3.nv25.12 with 20 frames of 1,024 points, dim 384, 8 heads,
+# bfloat16, a bool `key_padding_mask`, and `eval()` -- the fast path only runs
+# in eval, which is why training reached the first validation before dying.
+#
+# The failure surfaces as CUBLAS_STATUS_EXECUTION_FAILED or an illegal memory
+# access, and it poisons the context, so every later call fails too and the
+# traceback points wherever the process happened to be. Disabling the fast path
+# fixes it; the slow path is the one training already uses.
+torch.backends.mha.set_fastpath_enabled(False)
 
 # Per-frame quantities the output tokens are asked to retain. Every one is
 # computed from the input batch, so this costs no labels, and every one is
@@ -338,8 +382,7 @@ class RadarEncoder(nn.Module):
     def encode_points(self, points, mask, sensor=None):
         """Per-point features after the spatial layers. (B, F, P, dim)"""
         B, Fr, P, _ = points.shape
-        geometry = torch.stack([points[..., 0], points[..., 1],
-                                points[..., 2], points[..., 7]], dim=-1)
+        geometry = torch.stack([points[..., k] for k in GEOMETRY_INDEX], dim=-1)
         x = self.embed(torch.cat([points, self.fourier(geometry)], dim=-1))
 
         x = x.reshape(B * Fr, P, self.dim)
@@ -433,7 +476,8 @@ class RadarEncoder(nn.Module):
         weights = mask.to(points.dtype)
         count = weights.sum(dim=2)
         moving = (batch["is_moving"] * mask).sum(dim=2).to(points.dtype)
-        rcs, rng = points[..., 5], points[..., 7]
+        rcs = points[..., _CHANNELS.index("rcs")]
+        rng = points[..., _CHANNELS.index("range")]
         floor = torch.finfo(points.dtype).min
         target = torch.stack([
             torch.log1p(count) / LOG_SCALE,
