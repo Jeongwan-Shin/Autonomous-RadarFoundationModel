@@ -59,6 +59,9 @@ OBJECT_XYZ = re.compile(
     r"(?:\s+(?:size\s+)?(?P<l>\d+(?:\.\d+)?)\s*x\s*(?P<w>\d+(?:\.\d+)?)"
     r"\s*x\s*(?P<h>\d+(?:\.\d+)?)(?:\s*m)?)?"
     r"(?:\s+yaw\s+(?P<yaw>[+-]?\d+(?:\.\d+)?)(?:\s*deg)?)?"
+    # Heading is now a sector index 0..11 rather than degrees; the old form is
+    # kept so saved runs still parse.
+    r"(?:\s+heading\s+(?P<sector>\d+))?"
     r"(?P<motion>\s+moving|\s+stationary)?")
 
 
@@ -118,6 +121,8 @@ def parse_objects(text):
             size = ([float(g[k]) for k in ("l", "w", "h")]
                     if g.get("l") is not None else None)
             yaw = float(g["yaw"]) if g.get("yaw") is not None else None
+            if yaw is None and g.get("sector") is not None:
+                yaw = (int(g["sector"]) * 30.0 + 180.0) % 360.0 - 180.0
             out.append({"tid": tid, "cls": m.group("cls"), "x": x, "y": y,
                         "z": float(m.group("z")), "rng": math.hypot(x, y),
                         "az": math.degrees(math.atan2(y, x)), "has_az": True,
@@ -995,3 +1000,68 @@ for _plain in ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
                "agent_traj_azdeg", "agent_traj_bbox", "agent_traj_xy",
                "motion_seg_azdeg", "motion_seg_bbox", "qa"):
     SCORERS[f"{_plain}_cot"] = cot_scorer(SCORERS[_plain])
+
+
+# nuScenes 식 mAP. 중심거리 임계 네 개(0.5, 1, 2, 4 m)에서 평균한다.
+MAP_THRESHOLDS = (0.5, 1.0, 2.0, 4.0)
+
+
+def detection_map(items, thresholds=MAP_THRESHOLDS):
+    """{class: AP} 와 전체 mAP. `items` 는 (예측, 정답, 신뢰도) 의 목록.
+
+    F1 은 탐욕적 디코딩이 우연히 멈춘 한 지점의 값이라, 문턱을 낮추면 어떻게
+    되는지 말해 주지 않는다. mAP 는 검출을 확신 순으로 정렬해 정밀도-재현율
+    곡선을 그리므로, 그 정렬이 있어야 계산된다 -- 우리 출력에는 점수가 없었고,
+    그래서 지금까지 F1 하나만 낼 수 있었다.
+
+    임계는 nuScenes 를 따라 중심거리로 잰다. IoU 가 아닌 이유는 그쪽이
+    상자 크기 오차와 위치 오차를 섞기 때문이고, 우리 크기 예측은 클래스
+    평균에 가까워서 섞으면 위치가 보이지 않는다.
+    """
+    per_class = {}
+    for cls in {o["cls"] for _, truth, _ in items for o in truth}:
+        aps = []
+        for th in thresholds:
+            rows, n_truth = [], 0
+            for pred, truth, conf in items:
+                p = [o for o in pred if o["cls"] == cls]
+                t = [o for o in truth if o["cls"] == cls]
+                n_truth += len(t)
+                taken = set()
+                scored = sorted(
+                    zip(p, list(conf) + [0.0] * len(p)),
+                    key=lambda kv: -kv[1])
+                for o, c in scored:
+                    best, hit = th, None
+                    for j, q in enumerate(t):
+                        if j in taken:
+                            continue
+                        d = math.hypot(*(a - b for a, b in zip(_xy(o), _xy(q))))
+                        if d < best:
+                            best, hit = d, j
+                    if hit is not None:
+                        taken.add(hit)
+                    rows.append((c, hit is not None))
+            if not n_truth:
+                continue
+            rows.sort(key=lambda kv: -kv[0])
+            tp = fp = 0
+            recalls, precisions = [], []
+            for _, ok in rows:
+                tp, fp = tp + bool(ok), fp + (not ok)
+                recalls.append(tp / n_truth)
+                precisions.append(tp / (tp + fp))
+            # 재현율을 따라 정밀도의 최대값을 뒤에서부터 채운 뒤 사다리꼴 적분
+            best = 0.0
+            for i in range(len(precisions) - 1, -1, -1):
+                best = max(best, precisions[i])
+                precisions[i] = best
+            ap, last = 0.0, 0.0
+            for r, pr in zip(recalls, precisions):
+                ap += (r - last) * pr
+                last = r
+            aps.append(ap)
+        if aps:
+            per_class[cls] = sum(aps) / len(aps)
+    return {"per_class": per_class,
+            "mAP": sum(per_class.values()) / len(per_class) if per_class else None}

@@ -190,10 +190,15 @@ def number_distance_loss(logits, labels, number_ids, number_values):
     # minimum is the point mass on the true value and spreading is always paid
     # for.
     #
-    # Squared rather than absolute because the scorers are thresholded -- 2 m
-    # for detection matching, IoU 0.3 for boxes -- so a metre of error is
-    # nearly free and twenty is a total miss. L1 separates those by 20x, L2 by
-    # 400x, which is closer to what the metric actually does.
+    # Absolute rather than squared. Squaring was chosen because the scorers are
+    # thresholded, so a far miss should cost far more -- but it also makes the
+    # term explode early, when the mass is still spread over 2,503 literals: the
+    # first step measured 30,229 against a language loss near 4, and the run
+    # spiked between steps 20 and 40 whenever one far number landed in a batch.
+    # More importantly it minimises at the conditional mean, and the azimuth
+    # distribution this model keeps collapsing on is symmetric about zero --
+    # mean, median and mode all sit at 0, measured over 115,553 answers -- so
+    # the squared form pays the model to hedge toward the middle.
     #
     # Normalised per position, not per batch. A single batch scale would be the
     # mean over every number in it, and the tasks differ by 254x: box
@@ -204,7 +209,7 @@ def number_distance_loss(logits, labels, number_ids, number_values):
     # common for a yaw or a lateral offset -- from dividing by nothing.
     scale = truth.abs().clamp(min=1.0).unsqueeze(1)
     gap = (number_values.unsqueeze(0) - truth.unsqueeze(1)) / scale
-    return (probs * gap.pow(2)).sum(-1).mean()
+    return (probs * gap.abs()).sum(-1).mean()
 
 
 def setup():
@@ -481,6 +486,10 @@ def main(argv=None):
                     help="weight on a distance-aware penalty over digit tokens, "
                          "so 639 is scored as nearly right for 638 and 100 is "
                          "not. Targets the one stage measured to lose the radar")
+    ap.add_argument("--digit-warmup", type=int, default=1500,
+                    help="이 스텝까지 숫자 손실의 가중치를 0 에서 선형으로 "
+                         "올린다. 형식이 잡히기 전에 전량을 걸면 모든 값의 "
+                         "주변 평균 쪽으로 당기는데, 방위각의 주변 평균은 0 이다")
     ap.add_argument("--radar-contrast", type=float, default=0.0,
                     help="weight on a hinge that requires another clip's radar "
                          "to score at least --radar-margin worse. Costs a second "
@@ -647,6 +656,14 @@ def main(argv=None):
             loss = out.loss
             numeric = None
             if args.digit_weight > 0:
+                # The weight ramps in rather than starting at full strength.
+                # The number term is only meaningful once the answer has the
+                # right shape; before that it is a pull toward the marginal
+                # mean of every field, and the marginal mean of azimuth is
+                # zero. Measured on the last run, the generated |azimuth| fell
+                # from 13.9 to 5.5 degrees over the first 1,200 steps -- the
+                # model hedging to the middle -- before it began to open up.
+                warm = min(1.0, step / max(args.digit_warmup, 1))
                 # Labels are shifted by one against logits, as in any causal LM.
                 numeric = (number_distance_loss(out.logits[:, :-1],
                                                 batch["labels"][:, 1:],
@@ -654,7 +671,7 @@ def main(argv=None):
                            if number_ids is not None else
                            digit_distance_loss(out.logits[:, :-1],
                                                batch["labels"][:, 1:], digit_ids))
-                loss = loss + args.digit_weight * numeric
+                loss = loss + args.digit_weight * warm * numeric
             grounding = None
             if args.radar_contrast > 0 and batch["input_ids"].shape[0] > 1:
                 # The metric this project is judged on is how much worse the

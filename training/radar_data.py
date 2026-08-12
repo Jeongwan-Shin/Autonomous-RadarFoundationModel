@@ -65,7 +65,9 @@ CLASS_INDEX = {name: i for i, name in enumerate(CLASSES)}
 # Scales chosen from the measured ranges so every channel lands near unit
 # variance: range reaches 300 m, rcs spans -60..+60 dBsm, snr 11..50,
 # radial velocity +/-28 m/s.
-NORMALISE = np.array([50.0, 50.0, 100.0, 15.0, 5.0, 20.0], dtype=np.float32)
+# sin/cos of the bearing are already in [-1, 1].
+NORMALISE = np.array([50.0, 50.0, 100.0, 1.0, 1.0, 15.0, 5.0, 20.0],
+                     dtype=np.float32)
 
 # The encoder's bearing objective takes atan2(y, x) straight off the normalised
 # tensor, which is only the same angle while these two scales are equal.
@@ -293,7 +295,15 @@ class RadarClipDataset(Dataset):
                 order = np.arange(n)
 
             rng = np.hypot(rig[order, 0], rig[order, 1])
+            # The bearing, handed over directly. `atan2(y, x)` is not
+            # something a linear layer can form, and the one thing this model
+            # keeps failing at is azimuth -- so it is given as sin and cos
+            # rather than left to be inferred from x and y. Both are computed
+            # identically from nuScenes, so the shared six-channel contract
+            # becomes a shared eight.
+            az = np.arctan2(rig[order, 1], rig[order, 0])
             stack = np.stack([rig[order, 0], rig[order, 1], rng,
+                              np.sin(az), np.cos(az),
                               scan["radial_velocity"].to_numpy()[order],
                               residual[order],
                               scan["rcs"].to_numpy()[order]], axis=1)

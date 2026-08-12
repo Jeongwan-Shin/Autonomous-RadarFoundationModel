@@ -45,6 +45,7 @@ import glob
 import json
 import os
 import random
+import time
 
 import numpy as np
 import pandas as pd
@@ -334,9 +335,13 @@ DEFAULT_MIXTURE = {
     "qa": 2.0,
     "qa_cot": 2.0,
     "det_objects_azdeg": 1.5,
-    "det_objects_3dbbox": 1.5,
+    # 3D 상자가 이 작업의 주력이 되었으므로 배치의 30% 를 준다. 7.5% 였는데,
+    # 그것은 스물여섯 종에 고르게 나눈 결과이지 무엇을 보이려는지와는 무관한
+    # 숫자였다. 나머지 가중치 합이 37.0 이므로 두 종에 각각 7.93 이면
+    # 2*7.93 / (37.0 + 2*7.93) = 30.0% 다.
+    "det_objects_3dbbox": 7.93,
     "det_objects_azdeg_cot": 1.5,
-    "det_objects_3dbbox_cot": 1.5,
+    "det_objects_3dbbox_cot": 7.93,
     "plan_ego_xy": 1.5,
     "plan_ego_control": 1.5,
     "plan_ego_xy_cot": 1.5,
@@ -957,9 +962,20 @@ class InstructDataset(Dataset):
         frames = frame_cache.load(clip_id, wanted)
         if frames is None:
             # No cache for this clip -- decode the mp4 and slice as before.
-            decoded = pad_frames(clip_frames(self.nvidia_root,
-                                             self.clips.loc[clip_id]),
-                                 self.n_frames)
+            # 같은 이유로 여기도 재시도한다. 한 클립을 못 읽었다고 2백만
+            # 샘플짜리 학습을 죽일 이유가 없고, 그렇다고 조용히 빈 화면을
+            # 넣으면 프레임이 스무 장 다 같았던 그 결함처럼 숨는다.
+            decoded = None
+            for attempt in range(4):
+                try:
+                    decoded = pad_frames(clip_frames(self.nvidia_root,
+                                                     self.clips.loc[clip_id]),
+                                         self.n_frames)
+                    break
+                except Exception:
+                    if attempt == 3:
+                        raise
+                    time.sleep(0.2 * 2 ** attempt)
             frames = [decoded[i] for i in wanted]
 
         # The cache holds one size; each task is shown the size its token

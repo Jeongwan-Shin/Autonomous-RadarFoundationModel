@@ -77,7 +77,8 @@ import torch.nn.functional as F
 # over 630,693 returns. It costs one channel and saves a point-wise encoder
 # from having to build a non-linear function of two inputs in its first layer,
 # and both datasets compute it identically.
-CHANNELS = ("x", "y", "range", "radial_velocity", "doppler_residual", "rcs")
+CHANNELS = ("x", "y", "range", "sin_az", "cos_az",
+            "radial_velocity", "doppler_residual", "rcs")
 
 _CHANNELS = CHANNELS
 N_CHANNELS = len(_CHANNELS)
@@ -85,6 +86,8 @@ N_CHANNELS = len(_CHANNELS)
 # What the sinusoidal expansion is applied to: the channels that are positions
 # in metres. Doppler and rcs are not, and expanding them at eight octaves would
 # spend the same capacity on quantities that need none.
+# `sin_az`/`cos_az` are already bounded and periodic, so the sinusoidal
+# expansion has nothing to add to them; only the metric channels get it.
 GEOMETRY_CHANNELS = tuple(c for c in ("x", "y", "z", "range") if c in _CHANNELS)
 GEOMETRY_INDEX = [_CHANNELS.index(c) for c in GEOMETRY_CHANNELS]
 N_CLASSES = 12          # 11 named classes plus an "other" bucket
@@ -127,6 +130,13 @@ PRETRAIN_HEADS = ("head_moving", "head_class", "head_ego", "head_stats",
 # twelve azimuth cells of 10 degrees by four range rings of 10 m. Defined in
 # `radar_data` alongside the target that fills it.
 OCC_CELLS = 12 * 4
+
+# The polar readout's grid. 32 azimuth cells of 3.75 degrees by 8 range rings
+# of 5 m, which is 256 tokens -- the same count the global readout emitted.
+POLAR_AZ, POLAR_RANGE = 32, 8
+POLAR_LIMIT = 60.0         # 전방 섹터의 반각
+POLAR_MAX_RANGE = 40.0
+RANGE_SCALE = 100.0        # `range` is normalised by this in radar_data
 
 
 def encoder_kwargs(saved):
@@ -260,11 +270,19 @@ class Block(nn.Module):
             self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(),
                                      nn.Linear(hidden, dim))
 
-    def forward(self, x, memory=None, key_padding_mask=None, sensor=None):
+    def forward(self, x, memory=None, key_padding_mask=None, sensor=None,
+                attn_bias=None):
         q = self.norm_q(x)
         kv = q if memory is None else self.norm_kv(memory)
+        # `attn_bias` is (B, queries, keys) and is repeated per head, which is
+        # the shape `attn_mask` takes when it is float rather than boolean.
+        mask = None
+        if attn_bias is not None:
+            heads = self.attn.num_heads
+            mask = attn_bias.repeat_interleave(heads, dim=0)
         attended, _ = self.attn(q, kv, kv, need_weights=False,
-                                key_padding_mask=key_padding_mask)
+                                key_padding_mask=key_padding_mask,
+                                attn_mask=mask)
         x = x + attended
         normed = self.norm_mlp(x)
         return x + (self.mlp(normed, sensor) if self.n_experts
@@ -301,8 +319,9 @@ class RadarEncoder(nn.Module):
                  frame_queries=48, global_queries=256, n_frames=20,
                  dropout=0.0, readout="global", n_experts=0):
         super().__init__()
-        if readout not in ("global", "frame"):
-            raise ValueError(f"readout must be 'global' or 'frame', got {readout}")
+        if readout not in ("global", "frame", "polar"):
+            raise ValueError(f"readout must be 'global', 'frame' or 'polar', "
+                         f"got {readout}")
         self.fourier = FourierFeatures()
         self.embed = nn.Sequential(
             nn.Linear(N_CHANNELS + self.fourier.out_dim, dim), nn.GELU(),
@@ -325,6 +344,20 @@ class RadarEncoder(nn.Module):
         self.readout = readout
         if readout == "global":
             self.global_query = nn.Parameter(torch.randn(global_queries, dim) * 0.02)
+        if readout == "polar":
+            # One query per (azimuth, range) cell, so "where" lives in the
+            # token index instead of having to be encoded inside the vector.
+            # 32 x 8 is 3.75 degrees by 5 m, and measured over 3,969 objects
+            # only 3.2% of cells hold more than one -- against 12.0% at the
+            # 12 x 4 grid, and the same 256 tokens either way.
+            self.polar_query = nn.Parameter(
+                torch.randn(POLAR_AZ * POLAR_RANGE, dim) * 0.02)
+            # Attention is biased toward a query's own cell rather than
+            # restricted to it. A hard mask puts an object at +9.9 degrees and
+            # one at +10.1 into unrelated tokens; a bias lets the boundary
+            # blur, which is what a real detector's anchors do.
+            self.polar_bias = nn.Parameter(torch.tensor([2.0, 0.5]))
+            self.polar_pool_block = Block(dim, heads, dropout=dropout)
             self.global_pool = Block(dim, heads, dropout=dropout)
         else:
             # +1 input for log(1 + n): the summed features alone confound "many
@@ -369,6 +402,8 @@ class RadarEncoder(nn.Module):
     def n_tokens(self):
         """How many tokens reach the language model. The prompt has to reserve
         exactly this many radar placeholders."""
+        if self.readout == "polar":
+            return POLAR_AZ * POLAR_RANGE
         if self.readout == "global":
             return self.global_queries
         return self.n_frames * (self.frame_queries + 2)
@@ -441,9 +476,49 @@ class RadarEncoder(nn.Module):
         if self.readout == "global":
             tokens = self.global_pool(self.global_query.expand(B, -1, -1),
                                       memory=tokens)
+        elif self.readout == "polar":
+            tokens = self._polar_pool(points, mask, per_point)
         return {"tokens": self.norm_out(tokens),
                 "per_point": per_point,
                 "frame_tokens": frame_tokens}
+
+    def _polar_pool(self, points, mask, per_point):
+        """Pool the points into a polar grid, softly.
+
+        Each query owns a cell centre; the attention logit over a point is
+        lowered by how far that point sits from the centre, in degrees and in
+        metres. With the two coefficients learnable the model can widen or
+        narrow its cells, and `softplus` keeps them from going negative and
+        turning the bias into an attractor for far points.
+        """
+        B, Fr, P, _ = points.shape
+        idx = _CHANNELS.index
+        az = torch.rad2deg(torch.atan2(points[..., idx("y")],
+                                       points[..., idx("x")]))
+        rng = points[..., idx("range")] * RANGE_SCALE
+        flat_az = az.reshape(B, Fr * P)
+        flat_rng = rng.reshape(B, Fr * P)
+        memory = per_point.reshape(B, Fr * P, self.dim)
+        keep = mask.reshape(B, Fr * P)
+
+        centres_az = torch.linspace(-POLAR_LIMIT, POLAR_LIMIT,
+                                    POLAR_AZ + 1, device=points.device)
+        centres_az = (centres_az[:-1] + centres_az[1:]) / 2
+        step = POLAR_MAX_RANGE / POLAR_RANGE
+        centres_rng = torch.arange(POLAR_RANGE, device=points.device) * step + step / 2
+        ca = centres_az.repeat_interleave(POLAR_RANGE)
+        cr = centres_rng.repeat(POLAR_AZ)
+
+        alpha, beta = F.softplus(self.polar_bias) + 1e-3
+        bias = -(alpha * (flat_az[:, None, :] - ca[None, :, None]).abs()
+                 + beta * (flat_rng[:, None, :] - cr[None, :, None]).abs())
+        bias = bias.masked_fill(~keep[:, None, :], float("-inf"))
+        # A query whose cell is empty would see every key masked; let it fall
+        # back to the whole scan rather than producing NaNs.
+        dead = torch.isinf(bias).all(dim=-1, keepdim=True)
+        bias = torch.where(dead, torch.zeros_like(bias), bias)
+        q = self.polar_query.expand(B, -1, -1)
+        return self.polar_pool_block(q, memory=memory, attn_bias=bias)
 
     def losses(self, batch):
         points, mask = batch["points"], batch["mask"]

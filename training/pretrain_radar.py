@@ -198,7 +198,7 @@ def main(argv=None):
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--steps", type=int, default=0, help="stop early; for smoke tests")
     ap.add_argument("--dim", type=int, default=384)
-    ap.add_argument("--readout", default="frame", choices=("frame", "global"),
+    ap.add_argument("--readout", default="frame", choices=("frame", "global", "polar"),
                     help="'frame' emits frame-aligned tokens plus a sum and a "
                          "max token per frame; 'global' is the original "
                          "256-query pool, kept only to reload old checkpoints")

@@ -80,6 +80,124 @@ def collides(path, obstacles):
     return hit
 
 
+def bundle_rows(root, task, limit):
+    """번들에서 `limit` 건. 클립을 가로질러 고르게 뽑는다.
+
+    앞에서부터 자르면 안 된다. 파일이 클립 순서로 쌓여 있어 클립당 20 건이
+    붙어 있고, 40 건을 앞에서 자르면 장면 두 개만 스무 번씩 보게 된다.
+    실제로 그렇게 재고 있었고, 생성이 40 건 내내 거의 같았다 -- 모델이 굳은
+    것이 아니라 입력이 같았던 것인데, 점수만 보면 둘이 구별되지 않는다.
+    """
+    path = os.path.join(root, "by_task", f"{task}.jsonl")
+    if not os.path.exists(path):
+        return []
+    rows = [json.loads(l) for l in open(path)]
+    by_clip = {}
+    for r in rows:
+        by_clip.setdefault(r["clip_id"], []).append(r)
+    out, k = [], 0
+    while len(out) < min(limit, len(rows)):
+        added = False
+        for clip in sorted(by_clip):
+            if k < len(by_clip[clip]):
+                out.append(by_clip[clip][k])
+                added = True
+                if len(out) >= limit:
+                    break
+        if not added:
+            break
+        k += 1
+    return out
+
+
+def run_bundle(root, task, rows, loaded, budget):
+    """번들 형식(nuScenes)에 대해 생성한다.
+
+    학습 데이터와 같은 모델·같은 주입 방식을 쓴다. 다른 것은 어디서 프레임과
+    레이더를 읽느냐뿐이다 -- 그래서 여기서 나오는 점수와 NVIDIA 쪽 점수는
+    같은 체크포인트의 같은 능력을 두 센서 rig 에서 잰 것이다.
+    """
+    import torch
+    from PIL import Image
+    from transformers.video_utils import VideoMetadata
+    from training.train_vlm import RadarInjector
+    tokenizer, processor, llm, encoder, connector, pad_id, trained, device = loaded
+    from training.instruct_data import SYSTEM
+
+    injector = RadarInjector(llm.get_input_embeddings(), pad_id)
+    out = []
+    for rec in rows:
+        d = os.path.join(root, "clips", rec["clip_id"])
+        frames = [Image.open(os.path.join(d, "frames", f"f{i:02d}.jpg")).convert("RGB")
+                  for i in rec["frames"]]
+        z = np.load(os.path.join(d, "radar", f"{rec['radar']}.npz"))
+        nf, mp, nc = [int(v) for v in z["shape"]]
+        pts = np.zeros((nf, mp, nc), dtype=np.float32)
+        msk = np.zeros((nf, mp), dtype=bool)
+        kept, scan = z["points"].astype(np.float32), z["scan"]
+        for f in range(nf):
+            sel = kept[scan == f]
+            n = min(len(sel), mp)
+            if n:
+                pts[f, :n], msk[f, :n] = sel[:n], True
+        messages = [{"role": "system", "content": [{"type": "text", "text": SYSTEM}]},
+                    {"role": "user", "content": [{"type": "video"},
+                                                 {"type": "text", "text": rec["user"]}]}]
+        text = processor.apply_chat_template(messages, tokenize=False,
+                                             add_generation_prompt=True)
+        meta = [VideoMetadata(total_num_frames=len(frames), fps=1.0,
+                              width=frames[0].width, height=frames[0].height,
+                              duration=float(len(frames)), video_backend="manual",
+                              frames_indices=list(range(len(frames))))]
+        batch = processor(text=[text], videos=[frames], video_metadata=meta,
+                          return_tensors="pt").to(device)
+        with torch.no_grad():
+            r = encoder(torch.from_numpy(pts).unsqueeze(0).to(device, torch.bfloat16),
+                        torch.from_numpy(msk).unsqueeze(0).to(device),
+                        torch.tensor([rec["sensor"]], device=device))
+            injector.pending = connector(r["tokens"])
+            cut = batch["input_ids"].shape[1]
+            got = llm.generate(**batch, max_new_tokens=budget, do_sample=False,
+                               pad_token_id=tokenizer.pad_token_id
+                               or tokenizer.eos_token_id)
+        out.append({"task": task, "clip_id": rec["clip_id"],
+                    "generated": tokenizer.decode(got[0, cut:],
+                                                  skip_special_tokens=True).strip(),
+                    "reference": rec["target"]})
+    injector.remove()
+    return out
+
+
+def detection_scores(gens, prefix):
+    """mAP 와, 매칭 성공 여부와 무관한 위치 오차.
+
+    F1 과 거리 MAE 는 둘 다 짝지어진 물체만 센다. 짝이 12.5% 뿐인 구간에서는
+    가장 잘 맞은 여덟 중 하나만 보고 있는 셈이라, 실제보다 좋게 보인다.
+    Chamfer 는 정답마다 가장 가까운 생성까지의 거리라 짝이 없어도 값이 나온다.
+    """
+    from training.task_scorers import detection_map, parse_objects
+    items, chamfer = [], []
+    for g in gens:
+        p = parse_objects(g.get("generated"))
+        t = parse_objects(g.get("reference"))
+        items.append((p, t, g.get("confidence") or []))
+        if p and t:
+            for o in t:
+                chamfer.append(min(
+                    float(np.hypot(o.get("x", 0) - q.get("x", 0),
+                                   o.get("y", 0) - q.get("y", 0)))
+                    if o.get("x") is not None and q.get("x") is not None
+                    else float(abs((o.get("rng") or 0) - (q.get("rng") or 0)))
+                    for q in p))
+    m = detection_map(items)
+    out = {f"{prefix}_map": m["mAP"]}
+    if chamfer:
+        c = np.array(chamfer)
+        out[f"{prefix}_chamfer"] = float(np.median(c))
+        out[f"{prefix}_within2m"] = float(np.mean(c <= 2.0))
+    return out
+
+
 def evaluate(snapshot, args):
     from training.eval_all_tasks import load_model, run_task
 
@@ -92,11 +210,12 @@ def evaluate(snapshot, args):
     a.radar_dropout, a.out = 0.0, None
     loaded = load_model(a)
 
-    row = {}
+    row, kept = {}, []
     for task in WATCHED:
         r = run_task(task, a, loaded)
         if not r:
             continue
+        kept.extend(r.get("generations") or [])
         # `run_task` scores twice, once on the real radar and once on a
         # shuffled one. `full` is the model; `shuffled` is the control.
         s = r.get("full") or {}
@@ -111,10 +230,12 @@ def evaluate(snapshot, args):
             row["det_f1"] = s.get("f1")
             row["det_range_mae"] = s.get("range_mae")
             row["det_az_mae"] = s.get("az_mae")
+            row.update(detection_scores(gens, "det"))
         elif task == "det_objects_3dbbox":
             row["box_f1"] = s.get("f1")
             row["box_size_mae"] = s.get("size_mae")
             row["box_yaw_mae"] = s.get("yaw_mae")
+            row.update(detection_scores(gens, "box"))
         elif task == "plan_ego_xy":
             row["l2"] = s.get("displacement_mae_m")
             per_h = {1: [], 2: [], 3: []}
@@ -126,7 +247,37 @@ def evaluate(snapshot, args):
                                                        p[h][1] - t[h][1])))
             for h, v in per_h.items():
                 row[f"l2_{h}s"] = float(np.mean(v)) if v else None
-    return row
+
+    if args.nuscenes and os.path.isdir(args.nuscenes):
+        from training.eval_all_tasks import MAX_NEW
+        from training.task_scorers import scorer_for, summarise
+        for task in WATCHED:
+            rows = bundle_rows(args.nuscenes, task, args.nus_items)
+            if not rows:
+                continue
+            gens = run_bundle(args.nuscenes, task, rows, loaded,
+                              MAX_NEW.get(task, 48))
+            kept.extend({**g, "dataset": "nuscenes"} for g in gens)
+            recs = []
+            fn = scorer_for(task)
+            for g in gens:
+                try:
+                    recs.append(fn(g["generated"], g["reference"], ""))
+                except TypeError:
+                    recs.append(fn(g["generated"], g["reference"]))
+            s = summarise(task, recs)
+            if task == "det_objects_azdeg":
+                row["nus_det_f1"] = s.get("f1")
+                row["nus_range_mae"] = s.get("range_mae")
+                g = [mean_abs_azimuth(x["generated"]) for x in gens]
+                t2 = [mean_abs_azimuth(x["reference"]) for x in gens]
+                row["nus_az_gen"] = float(np.mean([v for v in g if v] or [0]))
+                row["nus_az_truth"] = float(np.mean([v for v in t2 if v] or [0]))
+            elif task == "det_objects_3dbbox":
+                row["nus_box_f1"] = s.get("f1")
+            elif task == "plan_ego_xy":
+                row["nus_l2"] = s.get("displacement_mae_m")
+    return row, kept
 
 
 def main(argv=None):
@@ -138,8 +289,17 @@ def main(argv=None):
                          "체크포인트마다 같아야 한다")
     ap.add_argument("--model", default="8B")
     ap.add_argument("--split", default="test")
-    ap.add_argument("--every", type=int, default=1,
-                    help="저장 몇 번마다 잴 것인가")
+    ap.add_argument("--stride", type=int, default=400,
+                    help="이 배수의 스텝만 잰다. 세는 대신 스텝 번호로 정하므로 "
+                         "감시기를 다시 띄워도 같은 지점이 찍힌다")
+    ap.add_argument("--nuscenes", default=None,
+                    help="nuScenes 번들 폴더. 주면 같은 체크포인트를 두 rig 에서 "
+                         "잰다 -- 재학습 없는 전이 시험")
+    ap.add_argument("--nus-items", type=int, default=40)
+    ap.add_argument("--offset", type=int, default=0,
+                    help="재개한 실행은 스텝을 0 부터 다시 센다. 재개 지점을 "
+                         "여기 주면 추세가 한 축 위에 놓이고, 이미 잰 스텝과 "
+                         "번호가 겹쳐 건너뛰는 일도 없어진다")
     ap.add_argument("--poll", type=int, default=120)
     args = ap.parse_args(argv)
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
@@ -151,15 +311,17 @@ def main(argv=None):
     log(f"감시 시작 {args.checkpoint} · GPU {args.device} · "
         f"태스크당 {args.items}건 · 이미 잰 것 {len(done)}개")
 
-    seen = 0
     while True:
         step = saved_step(args.checkpoint)
-        if step is None or step in done:
+        # `done` 은 누적 스텝으로 들고 있어야 한다. 재개한 실행은 0 부터 다시
+        # 세므로, 실행 기준 번호로 비교하면 재개 전에 이미 잰 400, 800 ... 과
+        # 부딪혀 전부 건너뛴다 -- 실제로 세 시간을 그렇게 놀았다.
+        absolute = None if step is None else step + args.offset
+        if absolute is None or absolute in done:
             time.sleep(args.poll)
             continue
-        seen += 1
-        if seen % args.every:
-            done.add(step)
+        if step % args.stride:
+            done.add(absolute)
             continue
         snap = os.path.join(args.checkpoint, f"_eval_{step}")
         try:
@@ -168,15 +330,24 @@ def main(argv=None):
             if saved_step(args.checkpoint) != step:
                 log(f"step {step} 복사 중 저장이 끼어들었습니다 -- 건너뜁니다")
                 shutil.rmtree(snap, ignore_errors=True)
-                done.add(step)
+                done.add(absolute)
                 continue
             started = time.monotonic()
-            row = evaluate(snap, args)
-            row["step"] = step
+            row, gens = evaluate(snap, args)
+            # A score cannot tell a wrong answer from an unparsed one. Twice
+            # now a 0.00 turned out to be the scorer failing to read a perfectly
+            # good generation, and both times the text was what settled it.
+            outdir = os.path.join(args.checkpoint, "generations")
+            os.makedirs(outdir, exist_ok=True)
+            with open(os.path.join(outdir, f"step{step:06d}.jsonl"), "w") as fh:
+                for g in gens:
+                    fh.write(json.dumps(g, ensure_ascii=False) + "\n")
+            row["step"] = absolute
+            row["run_step"] = step
             row["seconds"] = round(time.monotonic() - started, 1)
             with open(trend, "a") as fh:
                 fh.write(json.dumps(row) + "\n")
-            log(f"step {step:>6}  det F1 {row.get('det_f1'):.3f}  "
+            log(f"step {absolute:>6}  det F1 {row.get('det_f1'):.3f}  "
                 f"|az| 생성 {row.get('az_gen'):.1f} / 정답 "
                 f"{row.get('az_truth'):.1f}  L2 {row.get('l2'):.3f} m  "
                 f"({row['seconds']:.0f}s)")
@@ -184,7 +355,7 @@ def main(argv=None):
             log(f"step {step} 평가 실패: {type(exc).__name__} {exc}")
         finally:
             shutil.rmtree(snap, ignore_errors=True)
-            done.add(step)
+            done.add(absolute)
 
 
 if __name__ == "__main__":

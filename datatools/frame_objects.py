@@ -479,6 +479,14 @@ def ego_waypoints(derived, t_s):
 # serialisation
 # --------------------------------------------------------------------------
 
+YAW_SECTORS = 12
+
+
+def yaw_sector(deg):
+    """Heading as a sector index 0..11, each 30 degrees wide, 0 straight ahead."""
+    return int(((deg + 15.0) % 360.0) // 30.0)
+
+
 def box_yaw(row):
     """Heading in the rig frame, degrees, positive to the left of the ego.
 
@@ -515,9 +523,15 @@ def describe_object_xyz(row, hits=None, with_motion=True):
     # which is height, and the rest of these answers label every quantity --
     # "34 m az +13 deg". Three extra tokens per object buys an answer that
     # reads correctly on its own.
+    # Heading as one of twelve 30-degree sectors rather than a free number.
+    # Measured on the trained model, 100% of generated objects carried a yaw of
+    # -1, 0 or +1 degrees while the truth ran to -176 -- the continuous form
+    # was not being learnt at all. The number loss cannot help either: it reads
+    # -179 and +179 as 358 apart when they are two. Twelve sectors is coarser
+    # than the label but it is a question with an answer.
     text = (f"{row.label_class} ({row.center_x:.1f}, {row.center_y:.1f}, "
             f"{row.center_z:.1f}) size {row.size_x:.1f}x{row.size_y:.1f}x"
-            f"{row.size_z:.1f} m yaw {box_yaw(row):+.0f} deg")
+            f"{row.size_z:.1f} m heading {yaw_sector(box_yaw(row))}")
     if with_motion:
         text += " moving" if row.moved else " stationary"
     if hits is not None:

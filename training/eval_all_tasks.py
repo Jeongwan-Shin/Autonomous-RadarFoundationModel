@@ -157,6 +157,31 @@ def load_model(args):
     return tokenizer, processor, llm, encoder, connector, pad_id, trained, device
 
 
+def object_confidences(tokenizer, tokens, scores):
+    """One confidence per object, as the mean token probability of its span.
+
+    The answer lists objects separated by "; ", so the tokens are walked in
+    order and the probabilities are averaged within each separator-delimited
+    run. It is the model's own certainty rather than a learned score -- nothing
+    in the targets carries a confidence to train against -- but it is enough to
+    rank detections, which is all a precision-recall curve needs.
+    """
+    import torch
+    out, run = [], []
+    for i, tok in enumerate(tokens.tolist()):
+        if i >= len(scores):
+            break
+        p = torch.softmax(scores[i][0].float(), dim=-1)[tok].item()
+        piece = tokenizer.decode([tok])
+        run.append(p)
+        if ";" in piece:
+            out.append(sum(run) / len(run))
+            run = []
+    if run:
+        out.append(sum(run) / len(run))
+    return [round(v, 4) for v in out]
+
+
 def run_task(task, args, loaded):
     from training.instruct_data import InstructDataset, build_collate
     from training.train_vlm import RadarInjector
@@ -193,7 +218,14 @@ def run_task(task, args, loaded):
     # opinions get revised.
     generations = []
     pairs = {"full": [], "shuffled": []}
-    previous, shown = None, []
+    # The control substitutes another scene's radar and asks whether the answer
+    # changes. Carrying the immediately previous item forward was too weak:
+    # measured on a 119-item run, 50% of consecutive items came from the same
+    # clip, so half the "shuffled" condition was the same scene a few seconds
+    # earlier -- a control that barely controls, and one that understates the
+    # radar's contribution. A pool of earlier tokens, drawn from a different
+    # clip, is what the comparison was meant to be.
+    pool, shown = [], []
 
     for batch in loader:
         points = batch.pop("points").to(device, torch.bfloat16)
@@ -233,33 +265,57 @@ def run_task(task, args, loaded):
             for mode in ("full", "shuffled"):
                 if mode == "full":
                     injector.pending = tokens
-                elif previous is not None and previous.shape == tokens.shape:
-                    # Rolling within the batch does nothing at batch 1 -- a
-                    # single row rolled onto itself is the same row -- so the
-                    # previous item's radar is carried forward instead.
-                    injector.pending = previous
                 else:
-                    continue
-                out = llm.generate(**prompt,
+                    # Rolling within the batch does nothing at batch 1 -- a
+                    # single row rolled onto itself is the same row -- so an
+                    # earlier item's radar is substituted, and it has to come
+                    # from a different clip or the control is nearly a no-op.
+                    other = [p for c, p in pool
+                             if c != clip_id and p.shape == tokens.shape]
+                    if not other:
+                        continue
+                    injector.pending = other[
+                        (len(records["full"]) * 7919) % len(other)]
+                got = llm.generate(**prompt,
                                    max_new_tokens=max(MAX_NEW.get(task, 48),
                                                      args.max_new_floor),
                                    do_sample=False,
+                                   output_scores=True,
+                                   return_dict_in_generate=True,
                                    pad_token_id=tokenizer.pad_token_id
                                    or tokenizer.eos_token_id)
+                out = got.sequences
                 text = tokenizer.decode(out[0, cut:], skip_special_tokens=True)
+                # Per-object confidence, from the model's own token
+                # probabilities. Without a score the detections cannot be
+                # ranked, and without a ranking there is no precision-recall
+                # curve and therefore no mAP -- only F1 at whatever operating
+                # point the greedy decode happened to land on.
+                spans = object_confidences(tokenizer, out[0, cut:], got.scores)
                 result = scorer(text, reference)
                 records[mode].append(result)
                 generations.append({
                     "task": task, "mode": mode, "form": form,
                     "clip_id": clip_id, "prompt": asked[-220:],
                     "generated": text.strip(), "reference": reference.strip(),
+                    "confidence": spans,
+                    # The prompt goes with it. Without it a saved run cannot be
+                    # held against a baseline that reads the ego state -- which
+                    # is how we found that `plan_ego` sits below a fourteen
+                    # parameter ridge on the speed the prompt already states.
+                    "user": asked,
                 })
                 if "pred" in result and result["pred"] is not None:
                     pairs[mode].append((result["pred"], result["truth"], form))
                 if mode == "full" and len(shown) < args.show:
                     shown.append((text.strip().replace("\n", " ")[:100],
                                   reference[:100]))
-            previous = tokens.clone()
+            # Bounded, and kept on the CPU: 256 x 384 in bfloat16 is 192 KB
+            # per entry, so thirty-two of them is 6 MB and nothing competes
+            # with the model for device memory.
+            pool.append((clip_id, tokens.clone()))
+            if len(pool) > 32:
+                pool.pop(0)
 
     injector.remove()
     out = {"task": task, "n": len(records["full"]), "examples": shown,

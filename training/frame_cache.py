@@ -136,14 +136,20 @@ def load(clip_id, indices=None):
     path = cache_path(clip_id)
     if not os.path.exists(path):
         return None
-    try:
-        with np.load(path) as z:
-            want = range(N_FRAMES) if indices is None else indices
-            return [Image.open(io.BytesIO(z[f"f{i:02d}"].tobytes())).convert("RGB")
-                    for i in want]
-    except Exception:
-        # 잘린 파일 하나가 학습을 멈추게 두지 않는다.
-        return None
+    # 이 저장소는 Lustre 이고 워커 일흔 개가 동시에 읽는다. 읽기가 이따금
+    # 실패하는데, 그것은 파일이 깨진 것이 아니라 그 순간의 문제다. 한 번에
+    # 포기하면 호출한 쪽이 mp4 로 되돌아가고, 같은 순간에 1.5 GB zip 을
+    # 여느라 거기서도 실패해 학습이 통째로 멈춘다 -- 실제로 그렇게 죽었다.
+    for attempt in range(4):
+        try:
+            with np.load(path) as z:
+                want = range(N_FRAMES) if indices is None else indices
+                return [Image.open(io.BytesIO(z[f"f{i:02d}"].tobytes())).convert("RGB")
+                        for i in want]
+        except Exception:
+            if attempt == 3:
+                return None
+            time.sleep(0.2 * 2 ** attempt)
 
 
 def main(argv=None):
