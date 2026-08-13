@@ -30,7 +30,8 @@ OBJECT = re.compile(
     r"(?:\s*az\s*(?P<az>[+-]?\d+(?:\.\d+)?)\s*deg)?"
     r"(?P<motion>\s+moving|\s+stationary)?")
 # "+1s (+12.5, +0.2)"
-WAYPOINT = re.compile(r"\+(\d)s\s*\(\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)\s*\)")
+WAYPOINT = re.compile(r"\+(\d)s\s*\(\s*([+-]?\d+(?:\.\d+)?)m?\s*,\s*"
+                      r"([+-]?\d+(?:\.\d+)?)m?\s*\)")
 # "+1s 22 m az +16 deg"
 HORIZON = re.compile(r"\+(\d)s\s+(-?\d+(?:\.\d+)?)\s*m\s*az\s*([+-]?\d+(?:\.\d+)?)")
 NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
@@ -53,15 +54,19 @@ RANGE_ONLY_THRESHOLD_M = 1.0
 # scored on what it did emit, not dropped as unreadable.
 OBJECT_XYZ = re.compile(
     r"(?:#(?P<tid>\d+)\s+)?(?P<cls>[a-z_]+)\s*\(\s*"
-    r"(?P<x>[+-]?\d+(?:\.\d+)?)\s*,\s*"
-    r"(?P<y>[+-]?\d+(?:\.\d+)?)\s*,\s*"
-    r"(?P<z>[+-]?\d+(?:\.\d+)?)\s*\)"
-    r"(?:\s+(?:size\s+)?(?P<l>\d+(?:\.\d+)?)\s*x\s*(?P<w>\d+(?:\.\d+)?)"
+    r"(?P<x>[+-]?\d+(?:\.\d+)?)m?\s*,\s*"
+    r"(?P<y>[+-]?\d+(?:\.\d+)?)m?\s*,\s*"
+    r"(?P<z>[+-]?\d+(?:\.\d+)?)m?\s*\)"
+    r"(?:\s+(?:size\s+)?(?P<l>\d+(?:\.\d+)?)m?\s*x\s*(?P<w>\d+(?:\.\d+)?)m?"
     r"\s*x\s*(?P<h>\d+(?:\.\d+)?)(?:\s*m)?)?"
     r"(?:\s+yaw\s+(?P<yaw>[+-]?\d+(?:\.\d+)?)(?:\s*deg)?)?"
     # Heading is now a sector index 0..11 rather than degrees; the old form is
     # kept so saved runs still parse.
     r"(?:\s+heading\s+(?P<sector>\d+))?"
+    # nuScenes 의 AVE 와 AAE 가 재는 두 가지. 상자만으로는 안 나온다.
+    r"(?:\s+vel\s+(?P<vx>[+-]?\d+(?:\.\d+)?)m/s\s+"
+    r"(?P<vy>[+-]?\d+(?:\.\d+)?)m/s)?"
+    r"(?:\s+(?P<attr>moving|stopped|standing|with_rider))?"
     r"(?P<motion>\s+moving|\s+stationary)?")
 
 
@@ -123,11 +128,14 @@ def parse_objects(text):
             yaw = float(g["yaw"]) if g.get("yaw") is not None else None
             if yaw is None and g.get("sector") is not None:
                 yaw = (int(g["sector"]) * 30.0 + 180.0) % 360.0 - 180.0
+            vel = ((float(g["vx"]), float(g["vy"]))
+                   if g.get("vx") is not None else None)
             out.append({"tid": tid, "cls": m.group("cls"), "x": x, "y": y,
                         "z": float(m.group("z")), "rng": math.hypot(x, y),
                         "az": math.degrees(math.atan2(y, x)), "has_az": True,
                         "bbox": None, "moving": moving,
-                        "size": size, "yaw": yaw})
+                        "size": size, "yaw": yaw,
+                        "vel": vel, "attr": m.groupdict().get("attr")})
         else:
             az = m.group("az")
             out.append({"tid": tid, "cls": m.group("cls"),
@@ -230,7 +238,8 @@ def score_objects(generated, reference):
            "class_ok": 0, "motion_ok": 0, "id_ok": 0, "id_total": 0,
            "range_err": 0.0, "az_err": 0.0, "az_n": 0,
            "z_err": 0.0, "z_n": 0,
-           "size_err": 0.0, "size_n": 0, "yaw_err": 0.0, "yaw_n": 0}
+           "size_err": 0.0, "size_n": 0, "yaw_err": 0.0, "yaw_n": 0,
+           "vel_err": 0.0, "vel_n": 0, "attr_ok": 0, "attr_n": 0}
     for p, t in pairs:
         out[f"cls_{t['cls']}_tp"] = out.get(f"cls_{t['cls']}_tp", 0) + 1
         out["class_ok"] += p["cls"] == t["cls"]
@@ -241,6 +250,13 @@ def score_objects(generated, reference):
             out["size_err"] += sum(abs(a - b) for a, b
                                    in zip(p["size"], t["size"])) / 3.0
             out["size_n"] += 1
+        if p.get("vel") and t.get("vel"):
+            out["vel_err"] += math.hypot(p["vel"][0] - t["vel"][0],
+                                         p["vel"][1] - t["vel"][1])
+            out["vel_n"] += 1
+        if p.get("attr") and t.get("attr"):
+            out["attr_ok"] += p["attr"] == t["attr"]
+            out["attr_n"] += 1
         if p.get("yaw") is not None and t.get("yaw") is not None:
             # Wrapped: +179 and -179 are two degrees apart, not 358.
             d = abs(p["yaw"] - t["yaw"]) % 360.0
@@ -477,6 +493,10 @@ def summarise(task, records, correlation=None, _fn=None):
                             if total.get("yaw_n") else None),
                 "id_acc": (total["id_ok"] / total["id_total"]
                            if total["id_total"] else None),
+                "vel_mae": (total["vel_err"] / total["vel_n"]
+                            if total.get("vel_n") else None),
+                "attr_acc": (total["attr_ok"] / total["attr_n"]
+                             if total.get("attr_n") else None),
                 "per_class": _per_class(total)}
     if fn is score_waypoints:
         return {"metric": "waypoints", "n": n,

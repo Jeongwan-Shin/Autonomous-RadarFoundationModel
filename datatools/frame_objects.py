@@ -502,7 +502,8 @@ def box_yaw(row):
     return float(np.degrees(np.arctan2(heading[1], heading[0])))
 
 
-def describe_object_xyz(row, hits=None, with_motion=True):
+def describe_object_xyz(row, hits=None, with_motion=True, velocity=None,
+                        attribute=None):
     """A 3D box in rig coordinates: centre, extent and heading.
 
     x forward, y left, z up. The polar form loses precision with distance --
@@ -529,9 +530,18 @@ def describe_object_xyz(row, hits=None, with_motion=True):
     # was not being learnt at all. The number loss cannot help either: it reads
     # -179 and +179 as 358 apart when they are two. Twelve sectors is coarser
     # than the label but it is a question with an answer.
-    text = (f"{row.label_class} ({row.center_x:.1f}, {row.center_y:.1f}, "
-            f"{row.center_z:.1f}) size {row.size_x:.1f}x{row.size_y:.1f}x"
+    text = (f"{row.label_class} ({row.center_x:.1f}m, {row.center_y:.1f}m, "
+            f"{row.center_z:.1f}m) size {row.size_x:.1f}mx{row.size_y:.1f}mx"
             f"{row.size_z:.1f}m heading {yaw_sector(box_yaw(row))}")
+    # Velocity and attribute, the two quantities nuScenes' NDS scores that a
+    # box alone does not carry. Both come from the labels already loaded: the
+    # velocity is a central difference of the track's world position rotated
+    # into the ego frame, and the attribute is the same moving/stationary
+    # verdict task 06 makes, at the same 1 m/s threshold.
+    if velocity is not None:
+        text += f" vel {velocity[0]:+.1f}m/s {velocity[1]:+.1f}m/s"
+    if attribute is not None:
+        text += f" {attribute}"
     if with_motion:
         text += " moving" if row.moved else " stationary"
     if hits is not None:
@@ -638,6 +648,7 @@ def clip_items(clip_id, row, nvidia_root):
     # next, so the 3 s horizon that pins the shared anchors does not apply, and
     # its single-frame input means six instants cost less context than one of
     # the shared anchors did.
+    det_vel = world_velocities(boxes) if boxes is not None else {}
     for seconds in DET_ANCHOR_S:
         t_s = float(seconds)
         if t_s > derived["t"].max():
@@ -677,8 +688,24 @@ def clip_items(clip_id, row, nvidia_root):
         if listed is None:
             answer_xyz = "No road users in the forward sector."
         else:
-            answer_xyz = "; ".join(describe_object_xyz(r, with_motion=False)
-                                   for r in listed.itertuples())
+            # Velocity in the ego frame at this instant, and the attribute
+            # that follows from its magnitude.
+            _, eyaw = pose_at(derived, t_s)
+            ec, es = np.cos(-eyaw), np.sin(-eyaw)
+            parts = []
+            for r in listed.itertuples():
+                vel = attr = None
+                got = det_vel.get(r.track_id)
+                if got is not None:
+                    times, vx, vy = got
+                    k = int(np.argmin(np.abs(times - t_s)))
+                    wx, wy = float(vx[k]), float(vy[k])
+                    vel = (ec * wx - es * wy, es * wx + ec * wy)
+                    attr = object_attribute(r.label_class,
+                                            float(np.hypot(wx, wy)))
+                parts.append(describe_object_xyz(r, with_motion=False,
+                                                 velocity=vel, attribute=attr))
+            answer_xyz = "; ".join(parts)
         emit("det_objects_3dbbox", frame, question_xyz, answer_xyz)
 
         # What each sensor actually contributes, per object, before the answer
@@ -855,7 +882,7 @@ def clip_items(clip_id, row, nvidia_root):
         forms = {
             "xy": (asked_of + "Predict the ego vehicle's path over the next 3 "
                    "seconds as (x, y) offsets in metres.",
-                   "; ".join(f"+{h:.0f}s ({x:+.1f}, {y:+.1f})"
+                   "; ".join(f"+{h:.0f}s ({x:+.1f}m, {y:+.1f}m)"
                              for h, (x, y) in zip(HORIZON_S, way))),
             "control": (asked_of + "Predict the ego vehicle's speed and yaw "
                         "rate over the next 3 seconds.",
@@ -931,7 +958,7 @@ def clip_items(clip_id, row, nvidia_root):
                         f"{round(box[3]/height*BBOX_SCALE)}px]")
                 elif form == "xy":
                     x, y = agent_offset(derived, t_s, hit)
-                    parts.append(f"+{horizon:.0f}s ({x:+.1f}, {y:+.1f})")
+                    parts.append(f"+{horizon:.0f}s ({x:+.1f}m, {y:+.1f}m)")
                 else:
                     parts.append(f"+{horizon:.0f}s {hit.range_m:.0f}m az "
                                  f"{hit.azimuth_deg:+.0f}deg")
@@ -1005,7 +1032,7 @@ def clip_items(clip_id, row, nvidia_root):
         # what a perception stack actually hands a predictor.
         now = {"azdeg": (f"at {agent.range_m:.0f}m, azimuth "
                          f"{agent.azimuth_deg:+.0f}deg"),
-               "xy": "at ({:+.1f}, {:+.1f}) m".format(
+               "xy": "at ({:+.1f}m, {:+.1f}m)".format(
                    *agent_offset(derived, t_s, agent)),
                "bbox": None if now_box is None else f"at {now_box}"}
 
@@ -1160,6 +1187,41 @@ def world_speeds(boxes):
         out[tid] = (times, np.hypot(np.gradient(g["wx"].to_numpy(), times),
                                     np.gradient(g["wy"].to_numpy(), times)))
     return out
+
+
+def world_velocities(boxes):
+    """{track_id: (times, vx, vy)} in the world frame.
+
+    `world_speeds` returns the magnitude, which is what the moving/stationary
+    question needs. nuScenes' AVE is a vector error, so the components have to
+    survive -- and the ego frame they are reported in changes with the heading,
+    so the rotation is applied at the anchor rather than here.
+    """
+    out = {}
+    for tid, g in boxes.groupby("track_id"):
+        g = g.sort_values("t_s")
+        times = g["t_s"].to_numpy()
+        if len(times) < 3:
+            continue
+        out[tid] = (times,
+                    np.gradient(g["wx"].to_numpy(), times),
+                    np.gradient(g["wy"].to_numpy(), times))
+    return out
+
+
+def object_attribute(label_class, speed_ms):
+    """nuScenes 의 속성을 우리가 관측으로 정할 수 있는 만큼만.
+
+    `parked` 와 `stopped` 는 구별할 수 없다 -- 둘 다 정지해 있고, 어느 쪽인지는
+    운전자의 의도이지 센서에 보이는 것이 아니다. 그래서 정지한 차량은 전부
+    `stopped` 로 둔다. 나머지는 도플러가 이미 가르고 있는 것과 같은 판정이다.
+    """
+    moving = speed_ms > MOVING_MS
+    if label_class in ("person", "stroller"):
+        return "moving" if moving else "standing"
+    if label_class == "rider":
+        return "with_rider"
+    return "moving" if moving else "stopped"
 
 
 def motion_evidence(row, previous, derived, t_s, v_rig, hit):

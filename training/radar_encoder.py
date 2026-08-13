@@ -279,7 +279,9 @@ class Block(nn.Module):
         mask = None
         if attn_bias is not None:
             heads = self.attn.num_heads
-            mask = attn_bias.repeat_interleave(heads, dim=0)
+            # The bias has to carry the query's dtype -- the model runs in
+            # bfloat16 and a float32 mask is rejected outright.
+            mask = attn_bias.repeat_interleave(heads, dim=0).to(q.dtype)
         attended, _ = self.attn(q, kv, kv, need_weights=False,
                                 key_padding_mask=key_padding_mask,
                                 attn_mask=mask)
