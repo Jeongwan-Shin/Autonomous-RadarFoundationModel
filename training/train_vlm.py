@@ -156,7 +156,8 @@ def digit_distance_loss(logits, labels, digit_ids):
     return torch.nn.functional.smooth_l1_loss(expected, truth.float())
 
 
-def number_distance_loss(logits, labels, number_ids, number_values):
+def number_distance_loss(logits, labels, number_ids, number_values,
+                         number_units=None):
     """The same idea once a number is one token: penalise the distance in value.
 
     `digit_distance_loss` works on the ten digit tokens and therefore grades
@@ -177,6 +178,20 @@ def number_distance_loss(logits, labels, number_ids, number_values):
     lookup[number_ids] = number_values
     truth = lookup[labels[positions]]
     selected = logits[positions][:, number_ids]
+
+    # Only compare like with like. The literals carry their unit -- `37m`,
+    # `+12deg`, `7.3m/s`, `378px` -- and a distance between a metre and a
+    # degree is not a quantity. Before the units were fused the softmax ran
+    # over all 2,503 literals at once, so answering `37` in metres was
+    # penalised for every degree and pixel value it did not choose, by an
+    # amount that meant nothing.
+    if number_units is not None:
+        unit_of = torch.full((int(number_ids.max()) + 1,), -1,
+                             dtype=torch.long, device=logits.device)
+        unit_of[number_ids] = number_units
+        want = unit_of[labels[positions]]
+        allowed = number_units.unsqueeze(0) == want.unsqueeze(1)
+        selected = selected.masked_fill(~allowed, float("-inf"))
     probs = torch.softmax(selected.float(), dim=-1)
 
     # The expectation of the squared distance, not the distance of the
@@ -567,14 +582,20 @@ def main(argv=None):
     digit_ids = torch.tensor(DIGIT_TOKEN_IDS, device=device)
     from training.number_tokens import number_tokens as _num_literals
     _lits = _num_literals()
-    number_ids = number_values = None
+    number_ids = number_values = number_units = None
     if _lits:
         _ids = tokenizer.convert_tokens_to_ids(_lits)
         keep = [(i, l) for i, l in zip(_ids, _lits) if i is not None and i >= 0]
+        from training.number_tokens import split_unit
         number_ids = torch.tensor([i for i, _ in keep], device=device)
-        number_values = torch.tensor([float(l) for _, l in keep],
+        pairs = [split_unit(l) for _, l in keep]
+        number_values = torch.tensor([v for v, _ in pairs],
                                      device=device, dtype=torch.float32)
-        log(rank, f"number-distance loss over {len(keep):,} literals")
+        units = sorted({u for _, u in pairs})
+        number_units = torch.tensor([units.index(u) for _, u in pairs],
+                                    device=device, dtype=torch.long)
+        log(rank, f"number-distance loss over {len(keep):,} literals "
+                  f"in {len(units)} units ({', '.join(u or 'm' for u in units)})")
     injector = RadarInjector(llm.get_input_embeddings(), pad_id)
     # `full` shards these with FSDP2 instead, inside configure_stage.
     if world > 1 and args.stage != "full":
@@ -667,7 +688,8 @@ def main(argv=None):
                 # Labels are shifted by one against logits, as in any causal LM.
                 numeric = (number_distance_loss(out.logits[:, :-1],
                                                 batch["labels"][:, 1:],
-                                                number_ids, number_values)
+                                                number_ids, number_values,
+                                                number_units)
                            if number_ids is not None else
                            digit_distance_loss(out.logits[:, :-1],
                                                batch["labels"][:, 1:], digit_ids))

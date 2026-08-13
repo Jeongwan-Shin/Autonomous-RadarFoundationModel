@@ -48,11 +48,13 @@ from datatools import paths
 # task scales down from it -- upscaling a 384-wide frame recovers nothing the
 # decoder threw away. See `instruct_data.FRAME_SIZE` for who gets what.
 #
-# 1152x648 makes one vision token 3.3 degrees of the 120 degree field instead
-# of 10.0, which is the difference between a car at 30 m covering a third of a
-# token and covering a whole one.
-FRAME_WIDTH = 1152
-FRAME_HEIGHT = 648
+# 1920x1088 is the source resolution -- 1080 rounded up to a multiple of the
+# tower's 32-pixel token, so nothing is resampled twice. One vision token is
+# then 2.0 degrees of the 120 degree field, against 3.3 at 1152 and 10.0 at
+# the 384 this started at. A car at 30 m spans 3.4 degrees, so it now covers
+# nearly two cells rather than a third of one.
+FRAME_WIDTH = 1920
+FRAME_HEIGHT = 1088
 N_FRAMES = 20
 JPEG_QUALITY = 4          # ffmpeg -q:v, lower is better; 4 is visually clean
 

@@ -70,8 +70,8 @@ OBJECT_XYZ = re.compile(
 # box are paired by intersection-over-union instead.
 OBJECT_BBOX = re.compile(
     r"(?:#(?P<tid>\d+)\s+)?(?P<cls>[a-z_]+)\s*\[\s*"
-    r"(?P<x1>\d+)\s*,\s*(?P<y1>\d+)\s*,\s*"
-    r"(?P<x2>\d+)\s*,\s*(?P<y2>\d+)\s*\]"
+    r"(?P<x1>\d+)(?:px)?\s*,\s*(?P<y1>\d+)(?:px)?\s*,\s*"
+    r"(?P<x2>\d+)(?:px)?\s*,\s*(?P<y2>\d+)(?:px)?\s*\]"
     r"(?P<motion>\s+moving|\s+stationary)?")
 IOU_THRESHOLD = 0.3
 
@@ -301,8 +301,8 @@ LEAVES = "leaves the forward sector"
 # "+2s leaves the forward sector"
 HORIZON_GONE = re.compile(r"\+(\d)s\s+leaves the forward sector")
 # "+1s [117, 445, 387, 772]"
-HORIZON_BBOX = re.compile(r"\+(\d)s\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*"
-                          r"(\d+)\s*,\s*(\d+)\s*\]")
+HORIZON_BBOX = re.compile(r"\+(\d)s\s*\[\s*(\d+)(?:px)?\s*,\s*(\d+)(?:px)?\s*,\s*"
+                          r"(\d+)(?:px)?\s*,\s*(\d+)(?:px)?\s*\]")
 
 
 def _horizons(text):

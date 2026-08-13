@@ -130,16 +130,16 @@ WINDOW_TASKS = frozenset(WINDOWS)
 # `qa` and the descriptions read all twenty and stay where they are.
 FRAME_SIZE = {}
 for _t in INSTANT_TASKS:                       # one frame: 84 -> 720 tokens
-    FRAME_SIZE[_t] = (1152, 648)
-    FRAME_SIZE[f"{_t}_cot"] = (1152, 648)
+    FRAME_SIZE[_t] = (1920, 1088)
+    FRAME_SIZE[f"{_t}_cot"] = (1920, 1088)
 for _t in ("plan_ego_xy", "plan_ego_control", "agent_traj_azdeg",
            "agent_traj_bbox", "agent_traj_xy", "motion_seg_azdeg",
            "motion_seg_bbox"):                 # two frames: 84 -> 720
+    FRAME_SIZE[_t] = (1920, 1088)
+    FRAME_SIZE[f"{_t}_cot"] = (1920, 1088)
+for _t in ("track_step_azdeg", "track_step_bbox"):   # five frames: 252 -> 1008
     FRAME_SIZE[_t] = (1152, 648)
     FRAME_SIZE[f"{_t}_cot"] = (1152, 648)
-for _t in ("track_step_azdeg", "track_step_bbox"):   # five frames: 252 -> 1008
-    FRAME_SIZE[_t] = (768, 432)
-    FRAME_SIZE[f"{_t}_cot"] = (768, 432)
 DEFAULT_FRAME_SIZE = (384, 216)
 
 # Whatever the loops above decided, a task that reads all twenty frames stays
@@ -153,7 +153,7 @@ for _t in list(FRAME_SIZE):
         FRAME_SIZE[_t] = DEFAULT_FRAME_SIZE
 
 # The budget is checked here rather than discovered at the first step.
-_TOKENS = {(384, 216): 42, (768, 432): 168, (1152, 648): 360}   # per frame, 20-frame rate
+_TOKENS = {(384, 216): 42, (1152, 648): 360, (1920, 1088): 1020}   # 프레임당, 시간축 짝짓기 반영   # per frame, 20-frame rate
 for _t, _sz in FRAME_SIZE.items():
     _n = 1 if _t in INSTANT_TASKS else (WINDOWS[_t][2] if _t in WINDOWS else 20)
     _v = _TOKENS[_sz] * max(_n, 2)      # temporal patching pairs frames

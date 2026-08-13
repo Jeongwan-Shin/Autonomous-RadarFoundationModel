@@ -531,7 +531,7 @@ def describe_object_xyz(row, hits=None, with_motion=True):
     # than the label but it is a question with an answer.
     text = (f"{row.label_class} ({row.center_x:.1f}, {row.center_y:.1f}, "
             f"{row.center_z:.1f}) size {row.size_x:.1f}x{row.size_y:.1f}x"
-            f"{row.size_z:.1f} m heading {yaw_sector(box_yaw(row))}")
+            f"{row.size_z:.1f}m heading {yaw_sector(box_yaw(row))}")
     if with_motion:
         text += " moving" if row.moved else " stationary"
     if hits is not None:
@@ -545,7 +545,7 @@ def describe_object(row, hits=None, with_motion=True):
     """One object as text. `with_motion` is off where the grouping already says
     it -- task 06 lists under a moving/stationary heading, so repeating the word
     per object cost ~40% of that answer's length and taught nothing."""
-    text = f"{row.label_class} {row.range_m:.0f} m az {row.azimuth_deg:+.0f} deg"
+    text = f"{row.label_class} {row.range_m:.0f}m az {row.azimuth_deg:+.0f}deg"
     if with_motion:
         text += " moving" if row.moved else " stationary"
     if hits is not None:
@@ -583,7 +583,7 @@ def scene_summary(rows):
     moving = int(rows["moved"].sum())
     nearest = rows.iloc[0]
     return (f"{', '.join(parts)}; {moving} moving; nearest "
-            f"{nearest.label_class} at {nearest.range_m:.0f} m")
+            f"{nearest.label_class} at {nearest.range_m:.0f}m")
 
 
 def clip_items(clip_id, row, nvidia_root):
@@ -658,7 +658,7 @@ def clip_items(clip_id, row, nvidia_root):
         # the nearest eight inside 300 m -- false on 71.4% of anchors, and the
         # model learned to write eight objects whatever it saw. Naming the
         # range and the cap makes the answer decidable from the question.
-        question = (f"List the road users within {LIST_MAX_RANGE_M:.0f} m ahead, "
+        question = (f"List the road users within {LIST_MAX_RANGE_M:.0f}m ahead, "
                     f"nearest first, up to {MAX_LISTED}, with class, range and "
                     f"azimuth.")
         if listed is None:
@@ -668,7 +668,7 @@ def clip_items(clip_id, row, nvidia_root):
                                for r in listed.itertuples())
         emit("det_objects_azdeg", frame, question, answer)
 
-        question_xyz = (f"List the road users within {LIST_MAX_RANGE_M:.0f} m "
+        question_xyz = (f"List the road users within {LIST_MAX_RANGE_M:.0f}m "
                         f"ahead, nearest first, up to {MAX_LISTED}, as a 3D "
                         f"box: class, centre (x, y, z) in metres with x "
                         f"forward, y left and z up, then size as "
@@ -706,11 +706,11 @@ def clip_items(clip_id, row, nvidia_root):
                 if hit and evidence_xy.get(r.track_id):
                     ex, ey = evidence_xy[r.track_id]
                     clauses.append(
-                        f"{r.label_class}: camera az {seen:+.0f} deg, radar "
+                        f"{r.label_class}: camera az {seen:+.0f}deg, radar "
                         f"{hit[0]} return{'s' if hit[0] > 1 else ''} at "
-                        f"{ex:.0f} m az {ey:+.0f} deg")
+                        f"{ex:.0f}m az {ey:+.0f}deg")
                 else:
-                    clauses.append(f"{r.label_class}: camera az {seen:+.0f} deg, "
+                    clauses.append(f"{r.label_class}: camera az {seen:+.0f}deg, "
                                    f"no radar return")
             if clauses:
                 rationale = ("; ".join(clauses) + ". Range comes from the radar "
@@ -762,28 +762,28 @@ def clip_items(clip_id, row, nvidia_root):
 
             hit = evidence.get(r.track_id)
             ev = motion_evidence(r, was.get(r.track_id), derived, t_s, v_rig, hit)
-            where = f"{r.label_class} at {r.range_m:.0f} m az {r.azimuth_deg:+.0f} deg"
+            where = f"{r.label_class} at {r.range_m:.0f}m az {r.azimuth_deg:+.0f}deg"
             said = []
             if ev["measured_radial"] is not None:
                 gap = abs(ev["measured_radial"] - ev["expected_radial"])
-                said.append(f"radar expects {ev['expected_radial']:+.1f} m/s if "
+                said.append(f"radar expects {ev['expected_radial']:+.1f}m/s if "
                             f"stationary, measures {ev['measured_radial']:+.1f} "
                             f"(residual {gap:.1f})")
             else:
                 said.append("no radar return")
             if ev["expected_az"] is not None:
                 drift = abs(ev["measured_az"] - ev["expected_az"])
-                said.append(f"camera expects az {ev['expected_az']:+.0f} deg if "
+                said.append(f"camera expects az {ev['expected_az']:+.0f}deg if "
                             f"stationary, sees {ev['measured_az']:+.0f} "
-                            f"(residual {drift:.1f} deg)")
+                            f"(residual {drift:.1f}deg)")
             clauses.append(f"{where}: " + ", ".join(said))
 
         if not moving and not still:
             continue
-        rationale = (f"The ego is travelling at {ego_speed:.1f} m/s, yaw "
-                     f"{ego_yaw:+.1f} deg/s. " + "; ".join(clauses) +
-                     f". A radial residual above {MOVING_MS:.0f} m/s or a "
-                     f"bearing residual above {CAMERA_RESIDUAL_DEG:.0f} deg "
+        rationale = (f"The ego is travelling at {ego_speed:.1f}m/s, yaw "
+                     f"{ego_yaw:+.1f}deg/s. " + "; ".join(clauses) +
+                     f". A radial residual above {MOVING_MS:.0f}m/s or a "
+                     f"bearing residual above {CAMERA_RESIDUAL_DEG:.0f}deg "
                      f"means the object is moving; the Doppler is blind to an "
                      f"object crossing the ego's path and the bearing is blind "
                      f"to one approaching head-on, so either is enough.")
@@ -805,13 +805,13 @@ def clip_items(clip_id, row, nvidia_root):
                             continue
                         width, height = model["resolution"]
                         out.append(f"{r.label_class} "
-                                   f"[{round(box[0]/width*BBOX_SCALE)}, "
-                                   f"{round(box[1]/height*BBOX_SCALE)}, "
-                                   f"{round(box[2]/width*BBOX_SCALE)}, "
-                                   f"{round(box[3]/height*BBOX_SCALE)}]")
+                                   f"[{round(box[0]/width*BBOX_SCALE)}px, "
+                                   f"{round(box[1]/height*BBOX_SCALE)}px, "
+                                   f"{round(box[2]/width*BBOX_SCALE)}px, "
+                                   f"{round(box[3]/height*BBOX_SCALE)}px]")
                     else:
-                        out.append(f"{r.label_class} {r.range_m:.0f} m az "
-                                   f"{r.azimuth_deg:+.0f} deg")
+                        out.append(f"{r.label_class} {r.range_m:.0f}m az "
+                                   f"{r.azimuth_deg:+.0f}deg")
                 return ", ".join(out) if out else "none"
             a, b_ = render(moving), render(still)
             if a is None or b_ is None:
@@ -820,7 +820,7 @@ def clip_items(clip_id, row, nvidia_root):
                    else "as an image bounding box [x1, y1, x2, y2] normalised "
                         "to 0-1000")
             question = (f"Which of the road users within "
-                        f"{LIST_MAX_RANGE_M:.0f} m ahead are moving and which "
+                        f"{LIST_MAX_RANGE_M:.0f}m ahead are moving and which "
                         f"are stationary? Use the radar Doppler and the "
                         f"camera. Identify each {how}.")
             answer = f"moving: {a}. stationary: {b_}."
@@ -845,9 +845,9 @@ def clip_items(clip_id, row, nvidia_root):
         i = at_time(derived, t_s)
         speed = float(np.hypot(derived["velocity"][i, 0],
                                derived["velocity"][i, 1]))
-        rationale = (f"The ego vehicle is travelling at {speed:.1f} m/s and "
+        rationale = (f"The ego vehicle is travelling at {speed:.1f}m/s and "
                      f"will {ego_action(derived, t_s)}. At that speed it covers "
-                     f"about {speed:.0f} m per second.")
+                     f"about {speed:.0f}m per second.")
         # The route the car is following. Stated first because it is a
         # condition on the question, not a fact about the scene.
         command = nav_command(derived, t_s)
@@ -859,7 +859,7 @@ def clip_items(clip_id, row, nvidia_root):
                              for h, (x, y) in zip(HORIZON_S, way))),
             "control": (asked_of + "Predict the ego vehicle's speed and yaw "
                         "rate over the next 3 seconds.",
-                        "; ".join(f"+{h:.0f}s {v:.1f} m/s, yaw {w:+.1f} deg/s"
+                        "; ".join(f"+{h:.0f}s {v:.1f}m/s, yaw {w:+.1f}deg/s"
                                   for h, (v, w) in zip(HORIZON_S, controls))),
         }
         for form, (question, answer) in forms.items():
@@ -925,16 +925,16 @@ def clip_items(clip_id, row, nvidia_root):
                         continue
                     width, height = model["resolution"]
                     parts.append(
-                        f"+{horizon:.0f}s [{round(box[0]/width*BBOX_SCALE)}, "
-                        f"{round(box[1]/height*BBOX_SCALE)}, "
-                        f"{round(box[2]/width*BBOX_SCALE)}, "
-                        f"{round(box[3]/height*BBOX_SCALE)}]")
+                        f"+{horizon:.0f}s [{round(box[0]/width*BBOX_SCALE)}px, "
+                        f"{round(box[1]/height*BBOX_SCALE)}px, "
+                        f"{round(box[2]/width*BBOX_SCALE)}px, "
+                        f"{round(box[3]/height*BBOX_SCALE)}px]")
                 elif form == "xy":
                     x, y = agent_offset(derived, t_s, hit)
                     parts.append(f"+{horizon:.0f}s ({x:+.1f}, {y:+.1f})")
                 else:
-                    parts.append(f"+{horizon:.0f}s {hit.range_m:.0f} m az "
-                                 f"{hit.azimuth_deg:+.0f} deg")
+                    parts.append(f"+{horizon:.0f}s {hit.range_m:.0f}m az "
+                                 f"{hit.azimuth_deg:+.0f}deg")
             return "; ".join(parts)
 
         # Three ways to say where an object goes, and they do not share a
@@ -971,19 +971,19 @@ def clip_items(clip_id, row, nvidia_root):
                 seen_az = camera_azimuth(((box[0] + box[2]) / 2,
                                           (box[1] + box[3]) / 2), model, rot)
                 width, height = model["resolution"]
-                now_box = (f"[{round(box[0]/width*BBOX_SCALE)}, "
-                           f"{round(box[1]/height*BBOX_SCALE)}, "
-                           f"{round(box[2]/width*BBOX_SCALE)}, "
-                           f"{round(box[3]/height*BBOX_SCALE)}]")
+                now_box = (f"[{round(box[0]/width*BBOX_SCALE)}px, "
+                           f"{round(box[1]/height*BBOX_SCALE)}px, "
+                           f"{round(box[2]/width*BBOX_SCALE)}px, "
+                           f"{round(box[3]/height*BBOX_SCALE)}px]")
         hit = evidence.get(agent.track_id)
         clauses = [f"#{int(agent.track_id)} {agent.label_class} is at "
-                   f"{agent.range_m:.0f} m az {agent.azimuth_deg:+.0f} deg now"]
+                   f"{agent.range_m:.0f}m az {agent.azimuth_deg:+.0f}deg now"]
         if seen_az is not None:
-            clauses.append(f"camera az {seen_az:+.0f} deg")
+            clauses.append(f"camera az {seen_az:+.0f}deg")
         if hit:
             clauses.append(f"radar {int(hit['hit_points'])} returns at "
-                           f"{hit['hit_range_m']:.0f} m, radial "
-                           f"{hit['hit_radial']:+.1f} m/s")
+                           f"{hit['hit_range_m']:.0f}m, radial "
+                           f"{hit['hit_radial']:+.1f}m/s")
             move = ("closing" if hit["hit_radial"] < -0.5 else
                     "receding" if hit["hit_radial"] > 0.5 else
                     "holding its range")
@@ -1003,8 +1003,8 @@ def clip_items(clip_id, row, nvidia_root):
         # arithmetic the task is not about. Answering in (x, y) from a polar
         # question had the same shape. Pointing at a box with a box is also
         # what a perception stack actually hands a predictor.
-        now = {"azdeg": (f"at {agent.range_m:.0f} m, azimuth "
-                         f"{agent.azimuth_deg:+.0f} deg"),
+        now = {"azdeg": (f"at {agent.range_m:.0f}m, azimuth "
+                         f"{agent.azimuth_deg:+.0f}deg"),
                "xy": "at ({:+.1f}, {:+.1f}) m".format(
                    *agent_offset(derived, t_s, agent)),
                "bbox": None if now_box is None else f"at {now_box}"}
@@ -1294,17 +1294,17 @@ def step_reason(objects, previous, form="azdeg"):
         parts = []
         before = was.get(o["id"])
         if before is not None:
-            parts.append(f"was at {before['rng']:.0f} m az {before['az']:+.0f} deg")
+            parts.append(f"was at {before['rng']:.0f}m az {before['az']:+.0f}deg")
         else:
             parts.append("newly seen")
         if o.get("camera_az") is not None:
             hidden = o.get("occluded", 0.0)
-            parts.append(f"camera az {o['camera_az']:+.0f} deg"
+            parts.append(f"camera az {o['camera_az']:+.0f}deg"
                          + (f", {hidden * 100:.0f}% occluded" if hidden > 0.5 else ""))
         if o.get("radar"):
             rng, az, n = o["radar"]
-            parts.append(f"radar {n} return{'s' if n > 1 else ''} at {rng:.0f} m "
-                         f"az {az:+.0f} deg")
+            parts.append(f"radar {n} return{'s' if n > 1 else ''} at {rng:.0f}m "
+                         f"az {az:+.0f}deg")
         else:
             parts.append("no radar return")
         clauses.append(f"#{o['id']} {o['cls']}: " + ", ".join(parts))
@@ -1331,8 +1331,8 @@ def step_text(objects, form="azdeg"):
         return "; ".join(
             f"#{o['id']} {o['cls']} [{o['bbox'][0]}, {o['bbox'][1]}, "
             f"{o['bbox'][2]}, {o['bbox'][3]}]" for o in objects)
-    return "; ".join(f"#{o['id']} {o['cls']} {o['rng']:.0f} m "
-                     f"az {o['az']:+.0f} deg" for o in objects)
+    return "; ".join(f"#{o['id']} {o['cls']} {o['rng']:.0f}m "
+                     f"az {o['az']:+.0f}deg" for o in objects)
 
 
 def process(args_tuple):

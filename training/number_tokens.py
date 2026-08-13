@@ -28,7 +28,20 @@ import sys
 import numpy as np
 import torch
 
-NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+# 단위가 숫자에 붙어 있다. `37m`, `+12deg`, `7.3m/s`, `-1.6deg/s`, `378px`.
+# 미터는 기본 단위라 접미가 없고, 나머지는 붙는다 -- 그러면 같은 `37` 이
+# 미터와 도와 화소를 동시에 뜻하는 일이 없어지고, 손실이 같은 자로 잰
+# 값끼리만 거리를 잴 수 있다.
+NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:deg/s|m/s|deg|px|m)?")
+UNITS = ("deg/s", "m/s", "deg", "px", "m")
+
+
+def split_unit(literal):
+    """('37m') -> (37.0, 'm').  단위가 없으면 '' 로 둔다."""
+    for u in UNITS:
+        if literal.endswith(u):
+            return float(literal[: -len(u)]), u
+    return float(literal), ""
 VOCAB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           "training", "number_vocab.txt")
 
@@ -57,7 +70,9 @@ def add_number_tokens(tokenizer, model=None, embeddings=None):
         return added
     model.resize_token_embeddings(len(tokenizer))
     ids = tokenizer.convert_tokens_to_ids(literals)
-    values = np.array([float(x) for x in literals], dtype=np.float64)
+    # 값만 뽑아 초기화한다. 단위가 다른 토큰끼리는 어차피 손실에서 서로
+    # 비교되지 않으므로, 여기서는 같은 값이면 같은 자리에서 출발해도 된다.
+    values = np.array([split_unit(x)[0] for x in literals], dtype=np.float64)
     table = model.get_input_embeddings().weight
     init = value_embeddings(values, table.shape[1],
                             scale=float(table.detach().float().std()))
@@ -67,6 +82,11 @@ def add_number_tokens(tokenizer, model=None, embeddings=None):
         if out is not None and out.weight is not table:
             out.weight[torch.tensor(ids)] = init.to(out.weight.dtype).to(out.weight.device)
     return added
+
+
+def unit_of_each(literals):
+    """각 리터럴의 단위. 손실이 같은 단위끼리만 거리를 재게 하는 데 쓴다."""
+    return [split_unit(x)[1] for x in literals]
 
 
 def value_embeddings(values, dim, scale=0.02, n_bands=64):
