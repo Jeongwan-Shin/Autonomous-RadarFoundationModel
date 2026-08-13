@@ -26,13 +26,17 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 
 import numpy as np
 
 WATCHED = ("det_objects_azdeg", "det_objects_3dbbox", "plan_ego_xy")
 AZ = re.compile(r"az\s*([+-]?\d+)\s*deg")
-XY = re.compile(r"\+(\d)s\s*\(\s*([+-]?[\d.]+)\s*,\s*([+-]?[\d.]+)\s*\)")
+# 단위가 붙은 뒤로 좌표는 `+2.0m` 로 나온다. `m?` 가 없으면 이 정규식은
+# 아무것도 못 읽고, L2 평균은 나오는데 1s/2s/3s 칸만 비는 형태로 조용히
+# 틀린다 -- 채점기 쪽 WAYPOINT 는 이미 이 접미사를 허용하고 있었다.
+XY = re.compile(r"\+(\d)s\s*\(\s*([+-]?[\d.]+)m?\s*,\s*([+-]?[\d.]+)m?\s*\)")
 
 # The ego footprint the collision test sweeps along the predicted path. The
 # release does not ship vehicle dimensions per clip, so this is the usual
@@ -198,6 +202,152 @@ def detection_scores(gens, prefix):
     return out
 
 
+def worker_main(argv):
+    """한 GPU 에서 자기 몫만 생성하고 JSONL 로 뱉는다.
+
+    점수를 내지 않고 생성만 남기는 이유는, 채점기가 지금까지 네 번 틀렸고 그때
+    마다 추론을 다시 돌려야 했기 때문이다. 텍스트는 GPU 가 실제로 내놓은 것이고
+    지표는 그것에 대한 의견이다 -- 의견은 나중에 고칠 수 있어야 한다.
+    """
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--snapshot", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--shard", type=int, default=0)
+    ap.add_argument("--shards", type=int, default=1)
+    ap.add_argument("--items", type=int, default=60)
+    ap.add_argument("--nus-items", type=int, default=40)
+    ap.add_argument("--nuscenes", default=None)
+    ap.add_argument("--model", default="8B")
+    ap.add_argument("--split", default="test")
+    a = ap.parse_args(argv)
+    from training.eval_all_tasks import MAX_NEW, load_model, run_task
+
+    class A:
+        pass
+    cfg = A()
+    cfg.checkpoint, cfg.model, cfg.split = a.snapshot, a.model, a.split
+    cfg.items, cfg.workers, cfg.show = a.items, 2, 0
+    cfg.max_new_floor, cfg.all_profiles, cfg.seed = 0, True, 0
+    cfg.radar_dropout, cfg.out = 0.0, None
+    cfg.shard, cfg.shards = a.shard, a.shards
+    loaded = load_model(cfg)
+
+    rows = []
+    for task in WATCHED:
+        r = run_task(task, cfg, loaded)
+        if r:
+            rows.extend(r.get("generations") or [])
+    if a.nuscenes and os.path.isdir(a.nuscenes):
+        for task in WATCHED:
+            got = bundle_rows(a.nuscenes, task, a.nus_items)[a.shard::a.shards]
+            if got:
+                rows.extend({**g, "dataset": "nuscenes", "mode": "full"}
+                            for g in run_bundle(a.nuscenes, task, got, loaded,
+                                                MAX_NEW.get(task, 48)))
+    with open(a.out, "w") as fh:
+        for x in rows:
+            fh.write(json.dumps(x, ensure_ascii=False) + "\n")
+    return 0
+
+
+def evaluate_sharded(snapshot, args):
+    """GPU 마다 프로세스 하나씩 띄워 생성만 모으고, 채점은 여기서 한 번에.
+
+    배치는 1 그대로다. 배치를 키우려면 좌측 패딩과 샘플별 자르기와 신뢰도
+    분리를 다시 써야 하는데, 이 평가기는 이미 네 번 틀렸던 코드다. 쪼개는
+    쪽은 아이템별 논리를 건드리지 않는다.
+    """
+    import subprocess, tempfile
+    devices = [d.strip() for d in args.devices.split(",") if d.strip()]
+    tmp = tempfile.mkdtemp(prefix="shardeval_")
+    procs = []
+    for i, dev in enumerate(devices):
+        out = os.path.join(tmp, f"{i}.jsonl")
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES=dev,
+                   TOKENIZERS_PARALLELISM="false")
+        cmd = [sys.executable, "-m", "training.watch_eval", "--worker",
+               "--snapshot", snapshot, "--out", out,
+               "--shard", str(i), "--shards", str(len(devices)),
+               "--items", str(args.items), "--nus-items", str(args.nus_items),
+               "--model", args.model, "--split", args.split]
+        if args.nuscenes:
+            cmd += ["--nuscenes", args.nuscenes]
+        procs.append((subprocess.Popen(cmd, env=env,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.PIPE), out))
+    gens = []
+    for proc, out in procs:
+        _, err = proc.communicate()
+        if proc.returncode != 0:
+            log(f"  워커 실패 ({proc.returncode}): "
+                f"{err.decode(errors='replace').strip().splitlines()[-1:]}")
+        elif os.path.exists(out):
+            gens.extend(json.loads(l) for l in open(out))
+    shutil.rmtree(tmp, ignore_errors=True)
+    return score_generations(gens), gens
+
+
+def score_generations(gens):
+    """모아 온 생성에서 표의 모든 열을 계산한다."""
+    from training.task_scorers import scorer_for, summarise
+    row = {}
+    for ds, pre in ((None, ""), ("nuscenes", "nus_")):
+        for task in WATCHED:
+            got = [g for g in gens if g.get("task") == task
+                   and g.get("dataset") == ds and g.get("mode", "full") == "full"]
+            if not got:
+                continue
+            fn = scorer_for(task)
+            recs = []
+            for g in got:
+                try:
+                    recs.append(fn(g["generated"], g["reference"], ""))
+                except TypeError:
+                    recs.append(fn(g["generated"], g["reference"]))
+            s = summarise(task, recs)
+            if task == "det_objects_azdeg":
+                row[f"{pre}det_f1"] = s.get("f1")
+                # nuScenes 쪽 열 이름은 예전 행과 맞춰 둔다. 한 파일 안에서
+                # 같은 지표가 두 이름으로 갈리면 추세가 끊겨 보인다.
+                row[f"{pre}det_range_mae" if not pre else "nus_range_mae"] = \
+                    s.get("range_mae")
+                row[f"{pre}det_az_mae"] = s.get("az_mae")
+                a = [mean_abs_azimuth(g["generated"]) for g in got]
+                b = [mean_abs_azimuth(g["reference"]) for g in got]
+                row[f"{pre}az_gen"] = float(np.mean([v for v in a if v] or [0]))
+                row[f"{pre}az_truth"] = float(np.mean([v for v in b if v] or [0]))
+                row.update({f"{pre}{k}": v for k, v in
+                            detection_scores(got, "det").items()})
+                if ds is None:
+                    other = [g for g in gens if g.get("task") == task
+                             and g.get("dataset") is None
+                             and g.get("mode") == "shuffled"]
+                    if other:
+                        sh = summarise(task, [fn(g["generated"], g["reference"])
+                                              for g in other])
+                        row["det_f1_shuffled"] = sh.get("f1")
+            elif task == "det_objects_3dbbox":
+                row[f"{pre}box_f1"] = s.get("f1")
+                row[f"{pre}box_size_mae"] = s.get("size_mae")
+                row[f"{pre}box_yaw_mae"] = s.get("yaw_mae")
+                row[f"{pre}vel_mae"] = s.get("vel_mae")
+                row[f"{pre}attr_acc"] = s.get("attr_acc")
+                row.update({f"{pre}{k}": v for k, v in
+                            detection_scores(got, "box").items()})
+            elif task == "plan_ego_xy":
+                row[f"{pre}l2"] = s.get("displacement_mae_m")
+                per = {1: [], 2: [], 3: []}
+                for g in got:
+                    p, q = waypoints(g["generated"]), waypoints(g["reference"])
+                    for h in per:
+                        if h in p and h in q:
+                            per[h].append(float(np.hypot(p[h][0] - q[h][0],
+                                                         p[h][1] - q[h][1])))
+                for h, v in per.items():
+                    row[f"{pre}l2_{h}s"] = float(np.mean(v)) if v else None
+    return row
+
+
 def evaluate(snapshot, args):
     from training.eval_all_tasks import load_model, run_task
 
@@ -281,9 +431,15 @@ def evaluate(snapshot, args):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if "--worker" in argv:
+        return worker_main([a for a in argv if a != "--worker"])
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--checkpoint", required=True, help="학습의 --out 경로")
-    ap.add_argument("--device", default="4", help="이 감시기가 쓸 GPU")
+    ap.add_argument("--device", default="4", help="(구) 단일 GPU")
+    ap.add_argument("--devices", default="0,1,2,3,4",
+                    help="쉼표로 구분한 GPU 목록. 하나씩 프로세스를 띄워 "
+                         "항목을 나눠 생성하고, 채점은 부모가 모아서 한다")
     ap.add_argument("--items", type=int, default=60,
                     help="태스크당 항목 수. 추세를 보는 것이므로 작아도 되지만 "
                          "체크포인트마다 같아야 한다")
@@ -302,7 +458,6 @@ def main(argv=None):
                          "번호가 겹쳐 건너뛰는 일도 없어진다")
     ap.add_argument("--poll", type=int, default=120)
     args = ap.parse_args(argv)
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
     trend = os.path.join(args.checkpoint, "trend.jsonl")
     done = set()
@@ -333,7 +488,7 @@ def main(argv=None):
                 done.add(absolute)
                 continue
             started = time.monotonic()
-            row, gens = evaluate(snap, args)
+            row, gens = evaluate_sharded(snap, args)
             # A score cannot tell a wrong answer from an unparsed one. Twice
             # now a 0.00 turned out to be the scorer failing to read a perfectly
             # good generation, and both times the text was what settled it.

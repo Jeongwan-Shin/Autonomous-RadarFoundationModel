@@ -198,6 +198,12 @@ def run_task(task, args, loaded):
         all_profiles=True, radar_dropout=0.0)
     if group != task:
         dataset.items = [i for i in dataset.items if i["task"] == task][: args.items]
+    # 여러 GPU 에 나눠 돌릴 때, 각 프로세스가 자기 몫만 본다. 배치는 1 그대로라
+    # 아이템별 논리가 하나도 바뀌지 않는다 -- 이 평가기는 채점이 네 번 틀렸던
+    # 코드라, 빠르게 만들자고 루프를 다시 쓰는 것보다 쪼개는 편이 안전하다.
+    shards = getattr(args, "shards", 1) or 1
+    if shards > 1:
+        dataset.items = dataset.items[getattr(args, "shard", 0)::shards]
     if not len(dataset):
         log(f"{task}: no items in split={args.split}")
         return None
