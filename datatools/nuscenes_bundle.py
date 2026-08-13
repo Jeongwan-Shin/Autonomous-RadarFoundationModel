@@ -106,7 +106,7 @@ def read_radar(path):
 
 
 def radar_channels(d, calib, normalise):
-    """ARS408 을 우리 여섯 채널로. 센서 좌표에서 ego 좌표로 옮긴 뒤 계산한다.
+    """ARS408 을 인코더의 채널로. 센서 좌표에서 ego 좌표로 옮긴 뒤 계산한다.
 
     `radial_velocity` 는 (vx, vy) 를 시선 방향에 투영한 것이고,
     `doppler_residual` 은 자차 운동이 보상된 (vx_comp, vy_comp) 를 같은 방향에
@@ -125,8 +125,18 @@ def radar_channels(d, calib, normalise):
     safe = np.maximum(rng, 1e-6)
     radial = (v[:, 0] * x + v[:, 1] * y) / safe
     resid = (vc[:, 0] * x + vc[:, 1] * y) / safe
-    stack = np.stack([x, y, rng, radial, resid, d["rcs"].astype(np.float64)],
-                     axis=1)
+    # 이름으로 맞춘다. 예전에는 여섯 개를 순서대로 쌓았는데, 인코더가 그 뒤에
+    # `sin_az`/`cos_az` 를 얻자 번들은 여섯 채널 그대로 남았고, 평가는 20480x54
+    # 대 56x384 라는 행렬 곱 오류로 죽었다 -- 그 메시지에는 데이터 변환기가
+    # 등장하지 않는다. 이름으로 조립하면 채널이 늘거나 순서가 바뀌어도
+    # 여기서 KeyError 로 멈춘다.
+    from training.radar_data import CHANNELS
+    safe_rng = np.maximum(rng, 1e-6)
+    built = {"x": x, "y": y, "range": rng,
+             "sin_az": y / safe_rng, "cos_az": x / safe_rng,
+             "radial_velocity": radial, "doppler_residual": resid,
+             "rcs": d["rcs"].astype(np.float64)}
+    stack = np.stack([built[c] for c in CHANNELS], axis=1)
     return (stack / normalise).astype(np.float32)
 
 

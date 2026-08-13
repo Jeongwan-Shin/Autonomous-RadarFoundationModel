@@ -114,6 +114,11 @@ def bundle_rows(root, task, limit):
     return out
 
 
+def encoder_channels():
+    from training.radar_data import CHANNELS
+    return len(CHANNELS)
+
+
 def run_bundle(root, task, rows, loaded, budget):
     """번들 형식(nuScenes)에 대해 생성한다.
 
@@ -136,6 +141,13 @@ def run_bundle(root, task, rows, loaded, budget):
                   for i in rec["frames"]]
         z = np.load(os.path.join(d, "radar", f"{rec['radar']}.npz"))
         nf, mp, nc = [int(v) for v in z["shape"]]
+        # 번들은 자기가 만들어질 때의 채널 배치로 굳어 있다. 인코더가 그 뒤에
+        # sin_az/cos_az 를 얻으면 여기서 20480x54 대 56x384 라는 행렬 곱 오류로
+        # 터지는데, 그 메시지만 보고는 원인이 데이터 변환기라는 것을 알 수 없다.
+        if nc != encoder_channels():
+            raise RuntimeError(
+                f"번들 채널 {nc} != 인코더 {encoder_channels()} -- "
+                f"{root} 를 지금 채널로 다시 만들어야 한다")
         pts = np.zeros((nf, mp, nc), dtype=np.float32)
         msk = np.zeros((nf, mp), dtype=bool)
         kept, scan = z["points"].astype(np.float32), z["scan"]
@@ -232,22 +244,57 @@ def worker_main(argv):
     cfg.shard, cfg.shards = a.shard, a.shards
     loaded = load_model(cfg)
 
-    rows = []
+    # 단계가 끝날 때마다 바로 쓴다. 처음에는 끝에서 한 번에 썼는데, nuScenes
+    # 단계가 죽자 그 앞에서 이미 생성해 둔 NVIDIA 결과까지 같이 사라졌다 --
+    # 한 시간짜리 추론을, 그 추론과 상관없는 곳에서 난 오류로 버린 셈이다.
+    fh = open(a.out, "w")
+
+    def keep(rows):
+        for x in rows or []:
+            fh.write(json.dumps(x, ensure_ascii=False) + "\n")
+        fh.flush()
+
     for task in WATCHED:
-        r = run_task(task, cfg, loaded)
+        try:
+            r = run_task(task, cfg, loaded)
+        except Exception as exc:
+            print(f"{task}: {type(exc).__name__} {exc}", file=sys.stderr)
+            continue
         if r:
-            rows.extend(r.get("generations") or [])
+            keep(r.get("generations"))
     if a.nuscenes and os.path.isdir(a.nuscenes):
         for task in WATCHED:
             got = bundle_rows(a.nuscenes, task, a.nus_items)[a.shard::a.shards]
-            if got:
-                rows.extend({**g, "dataset": "nuscenes", "mode": "full"}
-                            for g in run_bundle(a.nuscenes, task, got, loaded,
-                                                MAX_NEW.get(task, 48)))
-    with open(a.out, "w") as fh:
-        for x in rows:
-            fh.write(json.dumps(x, ensure_ascii=False) + "\n")
+            if not got:
+                continue
+            try:
+                keep({**g, "dataset": "nuscenes", "mode": "full"}
+                     for g in run_bundle(a.nuscenes, task, got, loaded,
+                                         MAX_NEW.get(task, 48)))
+            except Exception as exc:
+                print(f"nuscenes/{task}: {type(exc).__name__} {exc}",
+                      file=sys.stderr)
+    fh.close()
     return 0
+
+
+def freest_device(devices):
+    """지금 가장 여유가 많은 GPU. 학습이 랭크마다 다른 양을 잡고 있다."""
+    import subprocess
+    try:
+        q = subprocess.run(["nvidia-smi", "--query-gpu=index,memory.free",
+                            "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=30)
+        free = {}
+        for line in q.stdout.strip().splitlines():
+            idx, mb = [s.strip() for s in line.split(",")]
+            free[idx] = int(mb)
+        got = [d for d in devices if d in free]
+        if got:
+            return max(got, key=lambda d: free[d])
+    except Exception:
+        pass
+    return devices[0]
 
 
 def evaluate_sharded(snapshot, args):
@@ -264,7 +311,11 @@ def evaluate_sharded(snapshot, args):
     for i, dev in enumerate(devices):
         out = os.path.join(tmp, f"{i}.jsonl")
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=dev,
-                   TOKENIZERS_PARALLELISM="false")
+                   TOKENIZERS_PARALLELISM="false",
+                   # 학습이 GPU 하나에 159 GiB 를 잡아 둔 옆자리라 남는 19 GiB
+                   # 안에서 18.3 GiB 를 써야 한다. 조각이 나면 2.3 GiB 하나를
+                   # 못 잡고 죽는다 -- 실제로 한 워커가 그렇게 죽었다.
+                   PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
         cmd = [sys.executable, "-m", "training.watch_eval", "--worker",
                "--snapshot", snapshot, "--out", out,
                "--shard", str(i), "--shards", str(len(devices)),
@@ -275,16 +326,46 @@ def evaluate_sharded(snapshot, args):
         procs.append((subprocess.Popen(cmd, env=env,
                                        stdout=subprocess.DEVNULL,
                                        stderr=subprocess.PIPE), out))
-    gens = []
-    for proc, out in procs:
+    gens, retry = [], []
+    for i, (proc, out) in enumerate(procs):
         _, err = proc.communicate()
         if proc.returncode != 0:
-            log(f"  워커 실패 ({proc.returncode}): "
-                f"{err.decode(errors='replace').strip().splitlines()[-1:]}")
-        elif os.path.exists(out):
+            tail = err.decode(errors="replace").strip().splitlines()[-1:]
+            log(f"  워커 {i} 실패 ({proc.returncode}): {tail}")
+            retry.append(i)
+        # 실패했더라도 그때까지 쓴 줄은 쓸모가 있다.
+        if os.path.exists(out):
             gens.extend(json.loads(l) for l in open(out))
+
+    # 학습이 GPU 마다 다른 양을 잡고 있어서, 어떤 자리에서는 평가가 들어가고
+    # 어떤 자리에서는 2 GiB 가 모자란다. 조각을 잃으면 그만큼 항목이 비므로,
+    # 실패한 조각만 지금 제일 빈 GPU 에서 다시 돌린다 -- 1 파의 워커들이
+    # 이미 나갔으니 그 자리는 비어 있다.
+    for i in retry:
+        dev = freest_device(devices)
+        out = os.path.join(tmp, f"{i}_retry.jsonl")
+        log(f"  조각 {i} 를 GPU {dev} 에서 다시")
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES=dev,
+                   TOKENIZERS_PARALLELISM="false",
+                   PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+        cmd = [sys.executable, "-m", "training.watch_eval", "--worker",
+               "--snapshot", snapshot, "--out", out,
+               "--shard", str(i), "--shards", str(len(devices)),
+               "--items", str(args.items), "--nus-items", str(args.nus_items),
+               "--model", args.model, "--split", args.split]
+        if args.nuscenes:
+            cmd += ["--nuscenes", args.nuscenes]
+        r = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE)
+        if os.path.exists(out):
+            gens.extend(json.loads(l) for l in open(out))
+        if r.returncode != 0:
+            log(f"    다시도 실패: "
+                f"{r.stderr.decode(errors='replace').strip().splitlines()[-1:]}")
+
     shutil.rmtree(tmp, ignore_errors=True)
-    return score_generations(gens), gens
+    log(f"  생성 {len(gens):,}건 모음")
+    return (score_generations(gens) if gens else {}), gens
 
 
 def score_generations(gens):
@@ -463,7 +544,7 @@ def main(argv=None):
     done = set()
     if os.path.exists(trend):
         done = {json.loads(l)["step"] for l in open(trend)}
-    log(f"감시 시작 {args.checkpoint} · GPU {args.device} · "
+    log(f"감시 시작 {args.checkpoint} · GPU {args.devices} · "
         f"태스크당 {args.items}건 · 이미 잰 것 {len(done)}개")
 
     while True:
