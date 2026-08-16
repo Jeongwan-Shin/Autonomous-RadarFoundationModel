@@ -293,7 +293,7 @@ def build(args, rank):
         encoder_args = encoder_kwargs(saved)
         encoder_args.pop("dim", None)
         encoder_args.pop("n_frames", None)
-    encoder = RadarEncoder(dim=args.radar_dim, n_frames=args.frames,
+    encoder = RadarEncoder(dim=args.radar_dim, n_frames=args.radar_frames,
                            **encoder_args)
     if state is not None:
         load_encoder_state(encoder, state["model"])
@@ -462,6 +462,10 @@ def main(argv=None):
                          "still all-reduce in fp32 either way.")
     ap.add_argument("--tasks", default="qa,description,ood_reasoning")
     ap.add_argument("--frames", type=int, default=20)
+    ap.add_argument("--radar-frames", type=int, default=10,
+                    help="레이더 스캔 수. 카메라 프레임 수와 별개다 -- 창의 "
+                         "길이는 태스크가 정하고, 이 값은 그 창을 몇 등분해 "
+                         "볼지를 정한다")
     ap.add_argument("--radar-dim", type=int, default=384)
     ap.add_argument("--radar-tokens", type=int, default=256)
     ap.add_argument("--radar-checkpoint",
@@ -484,6 +488,11 @@ def main(argv=None):
     ap.add_argument("--mixture", default=None,
                     help="task:weight pairs, e.g. qa:2,desc_radar:3")
     ap.add_argument("--verified-only", action="store_true")
+    ap.add_argument("--camera-dropout", type=float, default=0.15,
+                    help="이 비율의 항목에서 카메라를 검게 지운다. 레이더가 "
+                         "유일한 출처인 항목이 없으면 레이더를 읽을 이유가 "
+                         "없다 -- v12 에서 섞은 레이더 대조군과의 비가 39개 "
+                         "측정점 내내 1.10 이었다")
     ap.add_argument("--radar-dropout", type=float, default=0.0,
                     help="blank the radar on this fraction of items and replace "
                          "radar-only targets with a refusal")
@@ -552,6 +561,8 @@ def main(argv=None):
     dataset = InstructDataset(tasks=expand_tasks(args.tasks), split="train",
                               processor=processor, tokenizer=tokenizer,
                               n_frames=args.frames, radar_tokens=args.radar_tokens,
+                              radar_frames=args.radar_frames,
+                              camera_dropout=args.camera_dropout,
                               verified_only=args.verified_only,
                               samples=args.samples, mixture=mixture,
                               all_profiles=args.all_profiles,

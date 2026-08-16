@@ -55,7 +55,12 @@ LOSS_WEIGHTS = {"moving": 1.0, "box_class": 0.5, "ego": 0.1, "stats": 1.0,
                 # are. Weighted with `moving` because the detection tasks stand
                 # on it -- a linear probe recovered the bearing histogram from
                 # those tokens at only R^2 0.517 when nothing asked for it.
-                "bearing": 1.0}
+                "bearing": 1.0,
+                # 격자 칸을 Qwen 의 낱말 임베딩 쪽으로. 나머지 다섯이 인코더
+                # 안쪽을 정보 있게 만든다면 이것은 그 정보를 *읽을 수 있는*
+                # 자리에 놓는다 -- v12 에서 레이더 기여도가 1.10 이었던 것은
+                # 정보가 없어서가 아니라 다리가 놓이지 않아서였다.
+                "text": 0.5}
 
 
 def is_distributed():
@@ -176,6 +181,46 @@ def evaluate(model, loader, device, max_batches=20):
     }
 
 
+
+def text_anchors(model_dir, device):
+    """클래스 낱말 + "빈 칸" 의 Qwen 입력 임베딩. 모델 전체를 올리지 않는다.
+
+    임베딩 행렬만 필요하고 그것도 열두 행뿐이라, 8 B 를 메모리에 올리는 것은
+    낭비다. safetensors 인덱스에서 임베딩 텐서 하나만 열어 필요한 행을 꺼낸다.
+    """
+    import json
+    from safetensors import safe_open
+    from transformers import AutoTokenizer
+    from training.radar_data import CLASS_INDEX
+
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    names = [None] * len(CLASS_INDEX)
+    for name, i in CLASS_INDEX.items():
+        names[i] = name
+    # 낱말이 여러 조각으로 쪼개지면 조각들의 평균을 그 낱말의 자리로 삼는다.
+    pieces = [tok(f" {n.replace('_', ' ')}", add_special_tokens=False)["input_ids"]
+              for n in names] + [tok(" empty", add_special_tokens=False)["input_ids"]]
+
+    index = os.path.join(model_dir, "model.safetensors.index.json")
+    if os.path.exists(index):
+        with open(index) as fh:
+            weight_map = json.load(fh)["weight_map"]
+        key = next(k for k in weight_map if k.endswith("embed_tokens.weight"))
+        shard = os.path.join(model_dir, weight_map[key])
+    else:
+        shard, key = (os.path.join(model_dir, "model.safetensors"),
+                      "model.language_model.embed_tokens.weight")
+    with safe_open(shard, framework="pt") as fh:
+        if key not in fh.keys():
+            key = next(k for k in fh.keys() if k.endswith("embed_tokens.weight"))
+        emb = fh.get_slice(key)
+        rows = [torch.stack([torch.tensor(emb[i]) for i in ids]).float().mean(0)
+                for ids in pieces]
+    anchors = torch.stack(rows).to(device)
+    of_class = torch.arange(len(CLASS_INDEX), device=device)
+    return anchors, of_class
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--clips", default="qa", choices=("qa", "all"))
@@ -198,7 +243,7 @@ def main(argv=None):
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--steps", type=int, default=0, help="stop early; for smoke tests")
     ap.add_argument("--dim", type=int, default=384)
-    ap.add_argument("--readout", default="frame", choices=("frame", "global", "polar"),
+    ap.add_argument("--readout", default="frame", choices=("frame", "global", "polar", "polar_time"),
                     help="'frame' emits frame-aligned tokens plus a sum and a "
                          "max token per frame; 'global' is the original "
                          "256-query pool, kept only to reload old checkpoints")
@@ -207,6 +252,10 @@ def main(argv=None):
                          "MLP. The three front radars differ by a factor of "
                          "three in return density, which is what these split on")
     ap.add_argument("--router-weight", type=float, default=0.01)
+    ap.add_argument("--text-align", type=int, default=0,
+                    help="1 이면 격자 칸을 언어모델의 낱말 임베딩에 맞춘다")
+    ap.add_argument("--text-model",
+                    default="/NHNHOME/workspace/models/Qwen3-VL-8B-Instruct")
     ap.add_argument("--frame-queries", type=int, default=10,
                     help="resampled tokens per frame; the readout emits "
                          "n_frames x (this + 2) tokens in frame order")
@@ -247,9 +296,16 @@ def main(argv=None):
     val_dl = DataLoader(val_ds, batch_size=args.batch, shuffle=False,
                         num_workers=max(2, args.workers // 2), collate_fn=collate)
 
+    anchors = of_class = None
+    if args.text_align:
+        anchors, of_class = text_anchors(args.text_model, device)
+        anchors = anchors.to(torch.bfloat16)
+        log(rank, f"텍스트 앵커 {tuple(anchors.shape)} "
+                  f"({args.text_model.rsplit('/', 1)[-1]} 의 입력 임베딩)")
     model = RadarEncoder(dim=args.dim, n_frames=args.frames,
                          frame_queries=args.frame_queries,
                          readout=args.readout,
+                         text_dim=anchors.shape[1] if anchors is not None else 0,
                          n_experts=args.experts).to(device).to(torch.bfloat16)
     log(rank, f"readout {args.readout}: {model.n_tokens} tokens to the language model")
     n_params = sum(p.numel() for p in model.parameters())
@@ -280,7 +336,10 @@ def main(argv=None):
                    "ego_state": batch["ego_state"].to(device, torch.bfloat16,
                                                       non_blocking=True)}
             inner = model.module if hasattr(model, "module") else model
-            _, losses = inner.losses(gpu)
+            out, losses = inner.losses(gpu)
+            if anchors is not None and inner.readout == "polar_time":
+                losses["text"] = inner.text_anchor_loss(
+                    out["tokens"], gpu, anchors, of_class)
             total = sum(LOSS_WEIGHTS[k] * v for k, v in losses.items())
             balance = inner.router_loss()
             if balance is not None:

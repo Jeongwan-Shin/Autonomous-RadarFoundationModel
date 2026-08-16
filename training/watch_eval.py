@@ -188,9 +188,19 @@ def run_bundle(root, task, rows, loaded, budget):
             raise RuntimeError(
                 f"번들 채널 {nc} != 인코더 {encoder_channels()} -- "
                 f"{root} 를 지금 채널로 다시 만들어야 한다")
+        kept, scan = z["points"].astype(np.float32), z["scan"]
+        # 번들은 만들어질 때의 프레임 수로 굳어 있다. 인코더가 그보다 적은
+        # 슬롯을 쓰면 고르게 솎아 맞춘다 -- 번들을 다시 만들지 않고도 스캔
+        # 수가 바뀐 인코더를 시험할 수 있다.
+        want = encoder.n_frames if hasattr(encoder, "n_frames") else nf
+        if want != nf:
+            take = np.linspace(0, nf - 1, want).round().astype(int)
+            remap = {int(o): i for i, o in enumerate(take)}
+            sel = np.isin(scan, take)
+            kept, scan = kept[sel], np.array([remap[int(s)] for s in scan[sel]])
+            nf = want
         pts = np.zeros((nf, mp, nc), dtype=np.float32)
         msk = np.zeros((nf, mp), dtype=bool)
-        kept, scan = z["points"].astype(np.float32), z["scan"]
         for f in range(nf):
             sel = kept[scan == f]
             n = min(len(sel), mp)

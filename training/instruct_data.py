@@ -65,7 +65,9 @@ from training.video_frames import (FRAME_HEIGHT, FRAME_WIDTH,
                                    clip_frames, pad_frames)
 
 N_FRAMES = 20
-RADAR_TOKENS = 256
+# 10 슬롯 x 방위 16 x 거리 4. 학습은 인코더의 n_tokens 로 덮어쓰므로
+# 이 값은 인코더 없이 데이터만 볼 때의 기본값이다.
+RADAR_TOKENS = 640
 
 SYSTEM = ("You are a driving-scene assistant. You receive 20 video frames at 1 Hz, "
           "a matching sequence of forward-radar observations, and the ego "
@@ -100,17 +102,29 @@ INSTANT_TASKS = frozenset({"det_objects_azdeg", "det_objects_3dbbox",
 # rate follows the duration and the encoder's input shape never changes: five
 # seconds at 4 Hz for tracking, two at 10 Hz for planning. The camera is sampled
 # at 1 Hz either way, because that is what the video's keyframes are.
+# 레이더 스캔은 이제 열 개다. 창의 길이는 그대로 두고 표본만 절반으로 줄인다.
+#
+# 측정: 검출 창(직전 1초)에서 스캔당 반환이 LRR 657, MRR 309, SRR 229, 빈 스캔
+# 0%. 열 스캔이면 LRR 기준 6,400점이고, 시선속도는 스캔 하나에서 도플러로 바로
+# 나오므로 속도를 얻는 데 여러 시점이 필요하지 않다. 시간 슬롯이 필요한 이유는
+# 희소한 반환을 쌓는 것과 변화를 보는 것인데, 1초에 657점씩 들어오는 상황에서
+# 스무 슬롯은 과했다.
+#
+# 아낀 절반은 점별 인코더의 계산(1,024점 공간 어텐션 x 프레임 수)과, 격자
+# 해상도로 간다 -- 같은 토큰 예산에서 거리 구간을 둘에서 넷으로 늘렸다.
+RADAR_FRAMES = 10
+
 WINDOWS = {}
 for _t in ("track_step_azdeg", "track_step_bbox",
            "track_step_azdeg_cot", "track_step_bbox_cot"):
-    WINDOWS[_t] = (5, 4, 5)
+    WINDOWS[_t] = (5, 2, 5)
 for _t in ("plan_ego_xy", "plan_ego_control", "plan_ego_xy_cot",
            "plan_ego_control_cot", "agent_traj_azdeg", "agent_traj_bbox",
            "agent_traj_xy", "agent_traj_azdeg_cot", "agent_traj_bbox_cot",
            "agent_traj_xy_cot",
            "motion_seg_azdeg", "motion_seg_bbox",
            "motion_seg_azdeg_cot", "motion_seg_bbox_cot"):
-    WINDOWS[_t] = (2, 10, 2)
+    WINDOWS[_t] = (2, 5, 2)
 WINDOW_TASKS = frozenset(WINDOWS)
 
 # How large a frame each task is shown. Every task used 384x216, which the
@@ -335,17 +349,23 @@ DEFAULT_MIXTURE = {
     "qa": 2.0,
     "qa_cot": 2.0,
     "det_objects_azdeg": 1.5,
-    # 3D 상자가 이 작업의 주력이 되었으므로 배치의 30% 를 준다. 7.5% 였는데,
-    # 그것은 스물여섯 종에 고르게 나눈 결과이지 무엇을 보이려는지와는 무관한
-    # 숫자였다. 나머지 가중치 합이 37.0 이므로 두 종에 각각 7.93 이면
-    # 2*7.93 / (37.0 + 2*7.93) = 30.0% 다.
-    "det_objects_3dbbox": 7.93,
+    # 주력 두 가지에 배치의 절반을 준다: 3D 상자 27%, 자차 궤적 27%.
+    # 나머지 열여덟 종의 가중치 합이 40.0 이고 그것이 46% 를 차지하므로
+    # 전체는 86.96 이며, 27% 는 23.48 -- 평 태스크와 CoT 에 각각 11.74 다.
+    # (측정한 결과는 det 27.0%, plan_ego 27.0%, 합계 54%.)
+    "det_objects_3dbbox": 11.74,
     "det_objects_azdeg_cot": 1.5,
-    "det_objects_3dbbox_cot": 7.93,
-    "plan_ego_xy": 1.5,
-    "plan_ego_control": 1.5,
-    "plan_ego_xy_cot": 1.5,
-    "plan_ego_control_cot": 1.5,
+    "det_objects_3dbbox_cot": 11.74,
+    # 자차 궤적을 3D 상자와 나란히 올린다. 논문이 보이려는 두 지표가 3D F1 과
+    # L2 인데, 이전 배분에서 계획은 4.8% 로 검출의 다섯 분의 일이었다.
+    #
+    # `xy` 와 `control` 을 4:1 로 가른다. 둘은 같은 질문의 다른 출력 형식이고
+    # 지표로 재는 것은 `xy` 쪽이다. `control` 을 없애면 "지시문이 형식을
+    # 고른다" 는 주장 자체가 약해지므로 남기되, 무게는 지표를 따라간다.
+    "plan_ego_xy": 9.39,
+    "plan_ego_control": 2.35,
+    "plan_ego_xy_cot": 9.39,
+    "plan_ego_control_cot": 2.35,
     "agent_traj_azdeg": 1.5,
     "agent_traj_bbox": 1.5,
     "agent_traj_xy": 1.5,
@@ -828,6 +848,7 @@ class InstructDataset(Dataset):
     def __init__(self, tasks=("qa", "description", "ood_reasoning"), split="train",
                  processor=None, tokenizer=None, radar="lrr1",
                  n_frames=N_FRAMES, radar_tokens=RADAR_TOKENS,
+                 radar_frames=RADAR_FRAMES, camera_dropout=0.0,
                  verified_only=False, samples=0, mixture=None, seed=0,
                  max_text_tokens=512, nvidia_root=paths.NVIDIA_ROOT,
                  all_profiles=False, radar_dropout=0.0, forms=None):
@@ -851,6 +872,8 @@ class InstructDataset(Dataset):
         self.max_text_tokens = max_text_tokens
         self.nvidia_root = nvidia_root
         self.radar_dropout = radar_dropout
+        self.camera_dropout = camera_dropout
+        self.radar_frames = radar_frames
         self.seed = seed
 
         # One reader per radar type actually in play. Clips with no front radar
@@ -860,7 +883,8 @@ class InstructDataset(Dataset):
         groups = {}
         for clip_id in clip_ids:
             groups.setdefault(self.radar_of.get(clip_id) or radar, []).append(clip_id)
-        self.radar_ds = {name: RadarClipDataset(ids, radar=name, n_frames=n_frames)
+        self.radar_ds = {name: RadarClipDataset(ids, radar=name,
+                                               n_frames=radar_frames)
                          for name, ids in groups.items()}
         self.radar_pos = {}
         for name, dataset in self.radar_ds.items():
@@ -940,7 +964,10 @@ class InstructDataset(Dataset):
         if instant:
             # `frame` is 0-indexed and one frame is one second, so the instant
             # asked about is t = frame seconds.
-            radar = self.radar_ds[name].window(position, float(item["frame"]))
+            # 열 스캔을 10 Hz 로 -- 창은 여전히 직전 1초다. 센서 고유 속도로
+            # 열 개를 세면 0.5초가 되어 창이 반으로 줄어든다.
+            radar = self.radar_ds[name].window(position, float(item["frame"]),
+                                               rate_hz=10.0)
         elif window:
             seconds, radar_hz, n_frames = WINDOWS[item["task"]]
             radar = self.radar_ds[name].window(position, float(item["frame"]),
@@ -997,7 +1024,27 @@ class InstructDataset(Dataset):
         if present is None:
             points, mask = torch.zeros_like(points), torch.zeros_like(mask)
 
-        sensors = "camera, ego motion"
+        # 카메라를 지우는 항목. 이것이 없으면 레이더를 읽을 이유가 없다.
+        #
+        # 측정: v12 의 39개 측정점 내내 섞은 레이더 대조군이 정상과 거의 같았다
+        # (배수 평균 1.10). 커넥터와 언어모델을 함께 학습하므로 표현을 옮기지
+        # *못한* 것이 아니라, 옮길 *필요가 없었던* 것이다 -- 모든 항목에서
+        # 카메라가 보이니 카메라로 답할 수 있는 질문은 카메라로 답하는 편이
+        # 손실이 낮다. 레이더가 유일한 출처인 항목을 섞어야 그 계산이 바뀐다.
+        #
+        # 레이더가 없는 항목에는 적용하지 않는다. 둘 다 없으면 자차 상태만
+        # 남아 답이 성립하지 않고, 모델은 "모른다" 대신 사전분포를 외운다.
+        # 레이더 드롭아웃과 다른 흐름을 써야 한다. 같은 흐름이면 두 결정이
+        # 붙어서 "레이더 없음 + 카메라 없음" 이 우연보다 자주 나온다.
+        blind = (present is not None and self.camera_dropout > 0
+                 and random.Random(self.seed * 7_777_777 + i).random()
+                 < self.camera_dropout)
+        if blind:
+            # 검은 프레임으로 바꾼다. 프레임을 빼 버리면 비전 토큰 수가 달라져
+            # Qwen 의 video scatter 가 텍스트와 어긋나고 첫 배치에서 죽는다.
+            # 같은 크기의 검은 그림이면 토큰 수는 그대로이고 내용만 없다.
+            frames = [Image.new("RGB", f.size) for f in frames]
+        sensors = "ego motion" if blind else "camera, ego motion"
         sensors += f", {SENSOR_LABEL[present]}" if present else ", no radar"
 
         target = item["target"]

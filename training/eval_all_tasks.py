@@ -139,8 +139,11 @@ def load_model(args):
     state = torch.load(os.path.join(args.checkpoint, "adapters.pt"),
                        map_location="cpu")
     trained = state["args"]
+    # 레이더 스캔 수는 카메라 프레임 수와 다르다. 예전 체크포인트는 이 항목이
+    # 없으므로 그때의 값(카메라와 같음)으로 되돌린다.
     encoder = RadarEncoder(**{"dim": trained["radar_dim"],
-                              "n_frames": trained["frames"],
+                              "n_frames": trained.get("radar_frames")
+                                          or trained["frames"],
                               **{k: v for k, v in encoder_kwargs(trained).items()
                                  if k not in ("dim", "n_frames")}})
     load_encoder_state(encoder, state["encoder"])
@@ -194,6 +197,7 @@ def run_task(task, args, loaded):
     dataset = InstructDataset(
         tasks=(group,), split=args.split, processor=processor, tokenizer=tokenizer,
         n_frames=trained["frames"], radar_tokens=encoder.n_tokens,
+        radar_frames=trained.get("radar_frames") or trained["frames"],
         samples=0 if group != task else args.items,
         all_profiles=True, radar_dropout=0.0)
     if group != task:

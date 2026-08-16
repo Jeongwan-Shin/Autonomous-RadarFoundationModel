@@ -52,6 +52,7 @@ tokens at R^2 0.31, against 0.97 from a plain masked sum of the same points.
 import argparse
 import math
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -133,7 +134,18 @@ OCC_CELLS = 12 * 4
 
 # The polar readout's grid. 32 azimuth cells of 3.75 degrees by 8 range rings
 # of 5 m, which is 256 tokens -- the same count the global readout emitted.
-POLAR_AZ, POLAR_RANGE = 32, 8
+# 프레임마다 이 격자 하나씩. 10 슬롯 x 16 x 4 = 640 토큰.
+#
+# 예전에는 32 x 8 = 256 개를 스무 프레임 전체에 하나만 두었다. 공간은 촘촘했지만
+# 시간이 통째로 사라졌다 -- `_polar_pool` 이 (B, F*P) 로 펼쳐서 모으는 바람에,
+# 한 셀이 "지난 20초 동안 이 구역에 있던 모든 반환" 이 되었다. 프레임 위치
+# 부호와 시간축 어텐션은 계산되고도 `polar` 경로에서 버려지고 있었다.
+#
+# 레이더가 카메라보다 유리한 것은 거리, 시선속도, 그리고 시간에 걸친 추적인데
+# 셋째가 표현에서 제거되어 있었으니, 언어모델이 레이더 토큰을 무시한 것은
+# 합리적인 선택이었다 -- 39개 측정점에서 섞은 레이더 대조군과의 비가 평균
+# 1.10 이었다.
+POLAR_AZ, POLAR_RANGE = 16, 4
 POLAR_LIMIT = 60.0         # 전방 섹터의 반각
 POLAR_MAX_RANGE = 40.0
 RANGE_SCALE = 100.0        # `range` is normalised by this in radar_data
@@ -319,10 +331,11 @@ class RadarEncoder(nn.Module):
 
     def __init__(self, dim=384, heads=8, spatial_layers=4, temporal_layers=3,
                  frame_queries=48, global_queries=256, n_frames=20,
-                 dropout=0.0, readout="global", n_experts=0):
+                 dropout=0.0, readout="global", n_experts=0, text_dim=0):
         super().__init__()
-        if readout not in ("global", "frame", "polar"):
-            raise ValueError(f"readout must be 'global', 'frame' or 'polar', "
+        if readout not in ("global", "frame", "polar", "polar_time"):
+            raise ValueError(f"readout must be 'global', 'frame', 'polar' or "
+                         f"'polar_time', "
                          f"got {readout}")
         self.fourier = FourierFeatures()
         self.embed = nn.Sequential(
@@ -344,9 +357,13 @@ class RadarEncoder(nn.Module):
             Block(dim, heads, dropout=dropout) for _ in range(temporal_layers))
 
         self.readout = readout
+        # 언어모델 임베딩으로 쏘는 투영. 사전학습에서 여기까지 학습해 두면
+        # SFT 의 커넥터가 무에서 시작하지 않는다.
+        self.text_proj = nn.Linear(dim, text_dim) if text_dim else None
+        self.text_temperature = nn.Parameter(torch.tensor(float(np.log(0.07))))
         if readout == "global":
             self.global_query = nn.Parameter(torch.randn(global_queries, dim) * 0.02)
-        if readout == "polar":
+        if readout in ("polar", "polar_time"):
             # One query per (azimuth, range) cell, so "where" lives in the
             # token index instead of having to be encoded inside the vector.
             # 32 x 8 is 3.75 degrees by 5 m, and measured over 3,969 objects
@@ -406,6 +423,8 @@ class RadarEncoder(nn.Module):
         exactly this many radar placeholders."""
         if self.readout == "polar":
             return POLAR_AZ * POLAR_RANGE
+        if self.readout == "polar_time":
+            return self.n_frames * POLAR_AZ * POLAR_RANGE
         if self.readout == "global":
             return self.global_queries
         return self.n_frames * (self.frame_queries + 2)
@@ -480,6 +499,8 @@ class RadarEncoder(nn.Module):
                                       memory=tokens)
         elif self.readout == "polar":
             tokens = self._polar_pool(points, mask, per_point)
+        elif self.readout == "polar_time":
+            tokens = self._polar_pool_time(points, mask, per_point)
         return {"tokens": self.norm_out(tokens),
                 "per_point": per_point,
                 "frame_tokens": frame_tokens}
@@ -521,6 +542,104 @@ class RadarEncoder(nn.Module):
         bias = torch.where(dead, torch.zeros_like(bias), bias)
         q = self.polar_query.expand(B, -1, -1)
         return self.polar_pool_block(q, memory=memory, attn_bias=bias)
+
+    def _polar_pool_time(self, points, mask, per_point):
+        """프레임마다 극좌표 격자 하나. 슬롯에 시간 부호를 붙이고 시간축을 잇는다.
+
+        `_polar_pool` 과 다른 점은 프레임을 펼치지 않는다는 것뿐이다. 질의가
+        자기 프레임 안에서만 모으므로 "몇 초 시점, 어느 방향, 어느 거리" 가
+        토큰 하나에 들어간다. 어텐션 편향도 (B*F, 격자, P) 라 예전의
+        (B, 격자, F*P) 보다 F 배 작다.
+        """
+        B, Fr, P, _ = points.shape
+        idx = _CHANNELS.index
+        az = torch.rad2deg(torch.atan2(points[..., idx("y")],
+                                       points[..., idx("x")]))
+        rng = points[..., idx("range")] * RANGE_SCALE
+
+        flat_az = az.reshape(B * Fr, P)
+        flat_rng = rng.reshape(B * Fr, P)
+        memory = per_point.reshape(B * Fr, P, self.dim)
+        keep = mask.reshape(B * Fr, P)
+
+        centres_az = torch.linspace(-POLAR_LIMIT, POLAR_LIMIT,
+                                    POLAR_AZ + 1, device=points.device)
+        centres_az = (centres_az[:-1] + centres_az[1:]) / 2
+        step = POLAR_MAX_RANGE / POLAR_RANGE
+        centres_rng = torch.arange(POLAR_RANGE, device=points.device) * step + step / 2
+        ca = centres_az.repeat_interleave(POLAR_RANGE)
+        cr = centres_rng.repeat(POLAR_AZ)
+
+        alpha, beta = F.softplus(self.polar_bias) + 1e-3
+        bias = -(alpha * (flat_az[:, None, :] - ca[None, :, None]).abs()
+                 + beta * (flat_rng[:, None, :] - cr[None, :, None]).abs())
+        bias = bias.masked_fill(~keep[:, None, :], float("-inf"))
+        dead = torch.isinf(bias).all(dim=-1, keepdim=True)
+        bias = torch.where(dead, torch.zeros_like(bias), bias)
+
+        cells = POLAR_AZ * POLAR_RANGE
+        q = self.polar_query.expand(B * Fr, -1, -1)
+        tokens = self.polar_pool_block(q, memory=memory, attn_bias=bias)
+        tokens = tokens.reshape(B, Fr, cells, self.dim)
+        # 시간 부호는 여기서 붙는다. 이 한 줄이 없으면 열 개의 슬롯이 서로
+        # 구별되지 않아, 격자를 프레임마다 나눈 의미가 없어진다.
+        tokens = tokens + self.frame_pos[None, :Fr, None, :]
+        tokens = tokens.reshape(B, Fr * cells, self.dim)
+        for block in self.temporal:
+            tokens = block(tokens)
+        return tokens
+
+    def text_anchor_loss(self, tokens, batch, anchors, anchor_of_class):
+        """격자 칸의 토큰을, 그 칸에 있는 물체의 *언어모델 임베딩* 쪽으로.
+
+        지금까지의 다섯 목표는 전부 "레이더에서 라벨을 맞혀라" 였다. 그것은
+        인코더 *내부*를 정보 있게 만들지만, 토큰이 언어모델에게 읽히는지와는
+        무관하다 -- 그 다리는 SFT 가 커넥터로 놓아야 하는데, SFT 손실은 카메라만
+        보고도 최소화되므로 다리를 놓을 이유가 없다. 측정: 39개 측정점에서
+        섞은 레이더 대조군과의 비가 평균 1.10.
+
+        그래서 목표를 Qwen 의 입력 임베딩으로 직접 잡는다. `automobile` 이라는
+        낱말이 실제로 놓인 자리로 칸을 끌어당기면, 커넥터는 SFT 시작 시점에
+        이미 절반쯤 놓여 있다.
+
+        mmLIP(NeurIPS 2026 투고) 이 CLIP 텍스트 공간을 거쳐 배치 내 InfoNCE 로
+        하는 것과 다른 점이 둘 있다. 하나는 중간 공간을 거치지 않는 것이고,
+        (그쪽은 LLM 이 동결이라 사전 정렬이 결정적이지만 우리는 함께 학습한다)
+        다른 하나는 짝을 추정하지 않는다는 것이다 -- 점마다 어느 상자에 속하는지
+        라벨이 있으므로, 어느 칸이 어느 낱말과 짝인지 우리는 알고 있다. 그쪽의
+        신뢰도 재가중(PCL)이 추정하려는 "클러터" 도 여기서는 상자 밖 점이라는
+        라벨 그 자체다.
+        """
+        B, T, _ = tokens.shape
+        cells = POLAR_AZ * POLAR_RANGE
+        Fr = T // cells
+        # 칸마다 그 안의 점들이 속한 상자의 클래스. 없으면 "빈 칸".
+        idx = _CHANNELS.index
+        points, mask = batch["points"], batch["mask"]
+        az = torch.rad2deg(torch.atan2(points[..., idx("y")], points[..., idx("x")]))
+        rng = points[..., idx("range")] * RANGE_SCALE
+        a_bin = ((az + POLAR_LIMIT) / (2 * POLAR_LIMIT) * POLAR_AZ).long()
+        r_bin = (rng / POLAR_MAX_RANGE * POLAR_RANGE).long()
+        inside = (mask & (a_bin >= 0) & (a_bin < POLAR_AZ)
+                  & (r_bin >= 0) & (r_bin < POLAR_RANGE))
+        cell = (a_bin.clamp(0, POLAR_AZ - 1) * POLAR_RANGE
+                + r_bin.clamp(0, POLAR_RANGE - 1))
+
+        target = torch.full((B, Fr, cells), len(anchor_of_class),
+                            dtype=torch.long, device=tokens.device)
+        cls = batch["box_class"]
+        has_box = inside & (cls >= 0)
+        if has_box.any():
+            b_i, f_i, p_i = has_box.nonzero(as_tuple=True)
+            f_i = f_i.clamp(max=Fr - 1)
+            target[b_i, f_i, cell[b_i, f_i, p_i]] = anchor_of_class[
+                cls[b_i, f_i, p_i]]
+
+        z = F.normalize(self.text_proj(tokens), dim=-1)
+        a = F.normalize(anchors, dim=-1)
+        logits = z @ a.t() / self.text_temperature.exp().clamp(max=100.0)
+        return F.cross_entropy(logits.reshape(-1, a.shape[0]),
+                               target.reshape(-1))
 
     def losses(self, batch):
         points, mask = batch["points"], batch["mask"]
