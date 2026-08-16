@@ -37,14 +37,25 @@ COLUMNS = [
     ("l2_1s",           "L2@1s",    -1, "{:.2f}"),
     ("l2_2s",           "L2@2s",    -1, "{:.2f}"),
     ("l2_3s",           "L2@3s",    -1, "{:.2f}"),
-    # 같은 체크포인트를 nuScenes 에서 잰 것. 같은 열 이름이지만 다른 rig, 다른
-    # 섹터(±30 도), 다른 클래스 분포이므로 위 값과 나란히 빼면 안 된다 --
-    # 각각이 자기 안에서 어떻게 움직이는지를 본다.
-    ("nus_det_f1",      "nuS detF1", +1, "{:.3f}"),
-    ("nus_range_mae",   "nuS거리MAE", -1, "{:.2f}"),
-    ("nus_az_gen",      "nuS|az|",    0, "{:.1f}"),
-    ("nus_box_f1",      "nuS 3D F1", +1, "{:.3f}"),
-    ("nus_l2",          "nuS L2",    -1, "{:.3f}"),
+]
+
+# 같은 체크포인트를 nuScenes 에서 잰 것. 다른 rig, 다른 섹터(±30 도), 다른
+# 클래스 분포이므로 위 표와 나란히 빼면 안 된다 -- 각각이 자기 안에서 어떻게
+# 움직이는지를 본다. 그래서 표를 아예 둘로 나눈다.
+NUS_COLUMNS = [
+    ("step",            "step",      0, "{:.0f}"),
+    ("nus_det_f1",      "detF1",    +1, "{:.3f}"),
+    ("nus_range_mae",   "거리MAE",   -1, "{:.2f}"),
+    ("nus_az_gen",      "|az|",       0, "{:.1f}"),
+    ("nus_box_f1",      "3D F1",    +1, "{:.3f}"),
+    ("nus_box_map",     "3D mAP",   +1, "{:.3f}"),
+    ("nus_box_chamfer", "3D 어긋남",  -1, "{:.1f}"),
+    # 평균 하나로는 지평선 구조가 안 보인다. 1초가 좋고 3초가 나쁜 것과
+    # 셋 다 고만고만한 것은 완전히 다른 상태인데, 평균은 같을 수 있다.
+    ("nus_l2",          "L2평균",    -1, "{:.3f}"),
+    ("nus_l2_1s",       "L2@1s",    -1, "{:.2f}"),
+    ("nus_l2_2s",       "L2@2s",    -1, "{:.2f}"),
+    ("nus_l2_3s",       "L2@3s",    -1, "{:.2f}"),
 ]
 ARROW = {+1: "↑", -1: "↓", 0: ""}
 
@@ -68,15 +79,26 @@ def main(argv=None):
         print("아직 없음")
         return 0
 
-    head = "  " + " ".join(f"{n + ARROW[d]:>10}" for _, n, d, _ in COLUMNS)
-    print(head)
-    print("  " + "-" * (len(head) - 2))
-    for r in rows:
-        cells = []
-        for k, _, _, fmt in COLUMNS:
-            v = r.get(k)
-            cells.append(f"{'—':>10}" if v is None else f"{fmt.format(v):>10}")
-        print("  " + " ".join(cells))
+    def table(title, columns):
+        # 이 표에 값이 하나라도 있는 열만 남긴다. nuScenes 번들이 없는 실행에서
+        # 빈 칸만 스무 개 찍히면 표가 아니라 잡음이다.
+        keep = [c for c in columns
+                if c[0] == "step" or any(r.get(c[0]) is not None for r in rows)]
+        if len(keep) <= 1:
+            return
+        head = "  " + " ".join(f"{n + ARROW[d]:>9}" for _, n, d, _ in keep)
+        print(f"\n  {title}")
+        print(head)
+        print("  " + "-" * (len(head) - 2))
+        for r in rows:
+            cells = []
+            for k, _, _, fmt in keep:
+                v = r.get(k)
+                cells.append(f"{'—':>9}" if v is None else f"{fmt.format(v):>9}")
+            print("  " + " ".join(cells))
+
+    table("NVIDIA", COLUMNS)
+    table("nuScenes (재학습 없는 전이)", NUS_COLUMNS)
 
     first, last = rows[0], rows[-1]
     print()

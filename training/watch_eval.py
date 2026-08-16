@@ -23,6 +23,7 @@
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -83,6 +84,45 @@ def collides(path, obstacles):
                 break
     return hit
 
+
+
+# 학습 카메라의 초점거리. 120 도 화각을 폭 1920 으로 본 것이므로
+# f = (1920/2) / tan(60 deg) = 554 px. 모델은 이 축척으로 "겉보기 크기 -> 거리",
+# "픽셀 위치 -> 각도" 를 배웠다.
+TRAIN_FOCAL_PX = (1920 / 2) / math.tan(math.radians(60.0))
+
+OBJ_XYZ = re.compile(r"\(([+-]?[\d.]+)m, ([+-]?[\d.]+)m, ([+-]?[\d.]+)m\)")
+OBJ_POLAR = re.compile(r"(\d+)m az ([+-]\d+)deg")
+
+
+def refocus(text, focal_px):
+    """다른 초점거리의 카메라로 본 답을, 학습 카메라 축척으로 되돌린다.
+
+    라벨을 쓰지 않는다 -- 카메라 사양에서만 나온다. 물체의 겉보기 크기는 f/거리
+    에 비례하므로, 학습보다 f 가 큰 카메라(좁은 화각)에서는 같은 물체가 크게
+    보이고 모델은 더 가깝다고 답한다. 각도도 같다: 픽셀 오프셋 u 를 학습의 f 로
+    나눠 각을 만들므로 tan(답) = tan(참) x f_nu/f_학습 이 된다.
+
+    측정으로 확인한 값 -- nuScenes 에서 예측/정답 거리비의 이론값 0.608 대
+    실측 0.75(가까이)~0.99(멀리), tan 비 이론값 0.608 대 실측 0.545. NVIDIA 는
+    둘 다 1.00 이라 이 보정이 원래 맞던 것을 건드리지 않는다.
+    """
+    k = TRAIN_FOCAL_PX / focal_px          # 0.608
+    if not text:
+        return text
+
+    def xyz(m):
+        x, y, z = (float(v) for v in m.groups())
+        r, a = math.hypot(x, y), math.atan2(y, x)
+        r, a = r / k, math.atan(math.tan(a) * k)
+        return f"({r * math.cos(a):+.1f}m, {r * math.sin(a):+.1f}m, {z:+.1f}m)"
+
+    def polar(m):
+        r, a = float(m.group(1)), math.radians(float(m.group(2)))
+        return (f"{r / k:.0f}m az "
+                f"{math.degrees(math.atan(math.tan(a) * k)):+.0f}deg")
+
+    return OBJ_POLAR.sub(polar, OBJ_XYZ.sub(xyz, text))
 
 def bundle_rows(root, task, limit):
     """번들에서 `limit` 건. 클립을 가로질러 고르게 뽑는다.
@@ -278,6 +318,42 @@ def worker_main(argv):
     return 0
 
 
+def keep_best(args, snap, step, row):
+    """성적이 좋은 스냅샷을 K 개까지 남긴다.
+
+    학습은 200 스텝마다 `latest` 를 덮어쓰므로, 남기지 않으면 중간 지점의
+    가중치는 다음 저장 때 사라진다 -- 실제로 이 실행의 최고점(step 5,400)이
+    그렇게 없어졌고, 남은 것은 마지막 하나뿐이었다.
+
+    K 개를 남기는 이유는 60건 표본의 흔들림 때문이다. 최근 여덟 점의 3D F1
+    표준편차가 0.014 라, 한 점의 최고값은 실력이 아니라 그날의 표본일 수
+    있다. 후보를 몇 개 남겨 두었다가 끝에서 항목을 늘려 다시 재는 편이,
+    잡음의 최댓값을 골라 놓고 그것을 최고 성능이라 부르는 것보다 낫다.
+    """
+    metric = args.keep_metric
+    value = row.get(metric)
+    if not args.keep or value is None:
+        shutil.rmtree(snap, ignore_errors=True)
+        return
+    root = args.checkpoint
+    kept = []
+    for name in os.listdir(root):
+        m = re.match(r"best_(\d+)_([\d.]+)$", name)
+        if m:
+            kept.append((float(m.group(2)), int(m.group(1)), name))
+    if len(kept) >= args.keep and value <= min(kept)[0]:
+        shutil.rmtree(snap, ignore_errors=True)
+        return
+    target = os.path.join(root, f"best_{step}_{value:.3f}")
+    shutil.rmtree(target, ignore_errors=True)
+    os.rename(snap, target)
+    log(f"  스냅샷 보관 {os.path.basename(target)} ({metric} {value:.3f})")
+    kept.append((value, step, os.path.basename(target)))
+    for _, _, name in sorted(kept, reverse=True)[args.keep:]:
+        shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+        log(f"  스냅샷 정리 {name}")
+
+
 def freest_device(devices):
     """지금 가장 여유가 많은 GPU. 학습이 랭크마다 다른 양을 잡고 있다."""
     import subprocess
@@ -365,19 +441,40 @@ def evaluate_sharded(snapshot, args):
 
     shutil.rmtree(tmp, ignore_errors=True)
     log(f"  생성 {len(gens):,}건 모음")
-    return (score_generations(gens) if gens else {}), gens
+    return (score_generations(gens, bundle_focal(args.nuscenes))
+            if gens else {}), gens
 
 
-def score_generations(gens):
-    """모아 온 생성에서 표의 모든 열을 계산한다."""
+def bundle_focal(root):
+    """번들이 기록해 둔 카메라 초점거리(px). 없으면 보정을 건너뛴다."""
+    try:
+        with open(os.path.join(root or "", "manifest.json")) as fh:
+            return float(json.load(fh)["camera_focal_px"])
+    except Exception:
+        return None
+
+
+def score_generations(gens, focal_px=None):
+    """모아 온 생성에서 표의 모든 열을 계산한다.
+
+    nuScenes 는 두 번 잰다. `nus_` 는 손대지 않은 값이고 `nusf_` 는 카메라
+    초점거리로 축척만 되돌린 값이다. 둘을 나란히 두어야 무엇이 센서 차이이고
+    무엇이 모델의 한계인지 갈린다 -- 하나만 남기면 그 구별이 사라진다.
+    """
     from training.task_scorers import scorer_for, summarise
     row = {}
-    for ds, pre in ((None, ""), ("nuscenes", "nus_")):
+    passes = [(None, ""), ("nuscenes", "nus_")]
+    if focal_px:
+        passes.append(("nuscenes", "nusf_"))
+    for ds, pre in passes:
         for task in WATCHED:
             got = [g for g in gens if g.get("task") == task
                    and g.get("dataset") == ds and g.get("mode", "full") == "full"]
             if not got:
                 continue
+            if pre == "nusf_":
+                got = [{**g, "generated": refocus(g["generated"], focal_px)}
+                       for g in got]
             fn = scorer_for(task)
             recs = []
             for g in got:
@@ -390,7 +487,7 @@ def score_generations(gens):
                 row[f"{pre}det_f1"] = s.get("f1")
                 # nuScenes 쪽 열 이름은 예전 행과 맞춰 둔다. 한 파일 안에서
                 # 같은 지표가 두 이름으로 갈리면 추세가 끊겨 보인다.
-                row[f"{pre}det_range_mae" if not pre else "nus_range_mae"] = \
+                row[f"{pre}range_mae" if pre else "det_range_mae"] = \
                     s.get("range_mae")
                 row[f"{pre}det_az_mae"] = s.get("az_mae")
                 a = [mean_abs_azimuth(g["generated"]) for g in got]
@@ -538,6 +635,12 @@ def main(argv=None):
                          "여기 주면 추세가 한 축 위에 놓이고, 이미 잰 스텝과 "
                          "번호가 겹쳐 건너뛰는 일도 없어진다")
     ap.add_argument("--poll", type=int, default=120)
+    ap.add_argument("--keep", type=int, default=0,
+                    help="성적 상위 몇 개의 스냅샷을 남길지. 0 이면 남기지 "
+                         "않는다 (예전 동작). 하나가 17 GB 다")
+    ap.add_argument("--keep-metric", default="box_f1",
+                    help="무엇을 기준으로 남길지. 3D 상자가 이 연구의 주력이라 "
+                         "기본값은 box_f1")
     args = ap.parse_args(argv)
 
     trend = os.path.join(args.checkpoint, "trend.jsonl")
@@ -581,6 +684,7 @@ def main(argv=None):
             row["step"] = absolute
             row["run_step"] = step
             row["seconds"] = round(time.monotonic() - started, 1)
+            keep_best(args, snap, step, row)
             with open(trend, "a") as fh:
                 fh.write(json.dumps(row) + "\n")
             log(f"step {absolute:>6}  det F1 {row.get('det_f1'):.3f}  "
