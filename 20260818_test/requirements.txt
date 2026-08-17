@@ -1,0 +1,21 @@
+# 원본 서버에서 실제로 쓰인 버전. `pip install -r requirements.txt`
+#
+# torch 는 여기 없다. 원본은 NVIDIA 컨테이너 빌드
+# torch==2.10.0a0+b4e4ee81d3.nv25.12 (CUDA 13.1) 이고 PyPI 에 그 빌드가 없다.
+# 셋 중 하나로 맞춘다:
+#
+#   1) 같은 컨테이너를 쓴다  nvcr.io/nvidia/pytorch:25.12-py3   ← 가장 확실
+#   2) 그 GPU 에 맞는 정식 torch 를 먼저 깐다
+#        pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   3) 이미 torch 가 있으면 그대로 두고 아래만 깐다
+#
+# transformers 5.x 가 필요하다. Qwen3-VL 의 비디오 경로와
+# `AutoModelForImageTextToText` 가 4.x 에는 없다.
+
+transformers==5.14.1
+tokenizers==0.22.1
+accelerate==1.14.0
+safetensors==0.8.0
+huggingface-hub==1.25.1
+numpy==2.1.0
+pillow==12.0.0
