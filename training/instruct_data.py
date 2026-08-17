@@ -1036,8 +1036,10 @@ class InstructDataset(Dataset):
         # 남아 답이 성립하지 않고, 모델은 "모른다" 대신 사전분포를 외운다.
         # 레이더 드롭아웃과 다른 흐름을 써야 한다. 같은 흐름이면 두 결정이
         # 붙어서 "레이더 없음 + 카메라 없음" 이 우연보다 자주 나온다.
+        # 씨앗에 곱하면 안 된다 -- seed=0 이면 self.seed * 7_777_777 + i 가
+        # 그냥 i 가 되어 레이더 쪽 흐름과 완전히 같아진다. 더해야 갈린다.
         blind = (present is not None and self.camera_dropout > 0
-                 and random.Random(self.seed * 7_777_777 + i).random()
+                 and random.Random(7_777_777 + self.seed * 1_000_003 + i).random()
                  < self.camera_dropout)
         if blind:
             # 검은 프레임으로 바꾼다. 프레임을 빼 버리면 비전 토큰 수가 달라져

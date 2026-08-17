@@ -141,7 +141,13 @@ def load_model(args):
     trained = state["args"]
     # 레이더 스캔 수는 카메라 프레임 수와 다르다. 예전 체크포인트는 이 항목이
     # 없으므로 그때의 값(카메라와 같음)으로 되돌린다.
+    # 사전학습이 텍스트 정렬을 했다면 인코더에 투영 층이 하나 더 있다.
+    # 학습 쪽에서는 이미 맞춰 세우는데 평가기가 빠져 있어서, 첫 측정점이
+    # 다섯 조각 모두 "unexpected text_proj" 로 죽었다.
+    _text_dim = state["encoder"].get("text_proj.weight")
     encoder = RadarEncoder(**{"dim": trained["radar_dim"],
+                              "text_dim": (_text_dim.shape[0]
+                                           if _text_dim is not None else 0),
                               "n_frames": trained.get("radar_frames")
                                           or trained["frames"],
                               **{k: v for k, v in encoder_kwargs(trained).items()

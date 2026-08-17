@@ -293,7 +293,18 @@ def build(args, rank):
         encoder_args = encoder_kwargs(saved)
         encoder_args.pop("dim", None)
         encoder_args.pop("n_frames", None)
+    # 사전학습이 텍스트 정렬을 했다면 그 투영 층도 체크포인트에 들어 있다.
+    # 모양을 맞춰 세워야 불러올 수 있고, 그래야 아래에서 커넥터의 첫 층을
+    # 그것으로 시작할 수 있다 -- 커넥터가 무에서 시작하지 않는 것이
+    # 텍스트 정렬을 한 이유의 절반이다.
+    text_dim = 0
+    if args.radar_checkpoint and os.path.exists(args.radar_checkpoint):
+        _peek = torch.load(args.radar_checkpoint, map_location="cpu",
+                           weights_only=False).get("model", {})
+        if "text_proj.weight" in _peek:
+            text_dim = _peek["text_proj.weight"].shape[0]
     encoder = RadarEncoder(dim=args.radar_dim, n_frames=args.radar_frames,
+                           text_dim=text_dim,
                            **encoder_args)
     if state is not None:
         load_encoder_state(encoder, state["model"])
@@ -310,6 +321,16 @@ def build(args, rank):
     encoder = encoder.to(torch.cuda.current_device()).to(weight_dtype)
 
     connector = RadarConnector(args.radar_dim, llm_hidden_size(model_dir))
+    # 사전학습이 이미 384 -> 4096 을 낱말 임베딩 쪽으로 맞춰 두었다. 커넥터의
+    # 첫 선형층을 그것으로 시작하면 첫 스텝부터 레이더 토큰이 낱말이 놓인
+    # 근처에 떨어진다. 무작위 투영으로 시작하면 그동안 카메라를 쓰는 편이
+    # 엄격히 쉬우므로, 모델은 그쪽으로 갔다가 돌아오지 않는다.
+    if (text_dim and encoder.text_proj is not None
+            and encoder.text_proj.out_features == connector.d_llm):
+        with torch.no_grad():
+            connector.project[0].weight.copy_(encoder.text_proj.weight)
+            connector.project[0].bias.copy_(encoder.text_proj.bias)
+        log(rank, "커넥터 첫 층을 사전학습된 텍스트 투영으로 시작")
     # Without this the later stages threw away everything `align` learned. The
     # connector is the only thing that makes the radar tokens legible, and
     # starting it from noise means the language model spends its first steps

@@ -166,6 +166,12 @@ def encoder_kwargs(saved):
 
 def load_encoder_state(encoder, state_dict):
     """Load weights, tolerating absent pretraining heads and nothing else."""
+    # 예전 체크포인트는 온도를 스칼라로 저장했다. FSDP2 가 스칼라 파라미터를
+    # 거부해서 1차원으로 바꿨으므로, 옛 파일은 여기서 모양만 맞춰 준다.
+    key = "text_temperature"
+    if key in state_dict and state_dict[key].dim() == 0:
+        state_dict = dict(state_dict)
+        state_dict[key] = state_dict[key].reshape(1)
     missing, unexpected = encoder.load_state_dict(state_dict, strict=False)
     stray = [k for k in missing if not k.startswith(PRETRAIN_HEADS)]
     if stray or unexpected:
@@ -360,7 +366,10 @@ class RadarEncoder(nn.Module):
         # 언어모델 임베딩으로 쏘는 투영. 사전학습에서 여기까지 학습해 두면
         # SFT 의 커넥터가 무에서 시작하지 않는다.
         self.text_proj = nn.Linear(dim, text_dim) if text_dim else None
-        self.text_temperature = nn.Parameter(torch.tensor(float(np.log(0.07))))
+        # 1차원이어야 한다. FSDP2 는 스칼라 파라미터를 거부하고, 그 실패는
+        # 모델을 세울 때가 아니라 샤딩할 때 나와서 원인이 멀리 보인다.
+        self.text_temperature = nn.Parameter(
+            torch.tensor([float(np.log(0.07))]))
         if readout == "global":
             self.global_query = nn.Parameter(torch.randn(global_queries, dim) * 0.02)
         if readout in ("polar", "polar_time"):
@@ -637,7 +646,7 @@ class RadarEncoder(nn.Module):
 
         z = F.normalize(self.text_proj(tokens), dim=-1)
         a = F.normalize(anchors, dim=-1)
-        logits = z @ a.t() / self.text_temperature.exp().clamp(max=100.0)
+        logits = z @ a.t() / self.text_temperature.exp().clamp(max=100.0)[0]
         return F.cross_entropy(logits.reshape(-1, a.shape[0]),
                                target.reshape(-1))
 
