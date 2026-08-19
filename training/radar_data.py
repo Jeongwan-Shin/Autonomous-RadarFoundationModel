@@ -55,6 +55,7 @@ SENSOR_NAME = {"srr0": "radar_front_center_srr_0",
 # 골라야 하고, radar_data 가 이미 radar_encoder 를 참조하므로 방향은
 # 하나뿐이다.
 from training.radar_encoder import CHANNELS
+from training.traj_tokens import HIST_POINTS, HIST_SECONDS
 
 
 CLASSES = ("automobile", "person", "heavy_truck", "bus", "trailer", "rider",
@@ -221,7 +222,7 @@ class RadarClipDataset(Dataset):
                                     row[f"radar_{short}_member"])
                 scans = np.sort(radar["timestamp"].unique())
 
-        ego_t, ego_v, ego_q, _ = self._ego(row)
+        ego_t, ego_v, ego_q, ego_raw = self._ego(row)
         obstacle = self._boxes(row, None)
 
         F, P, C = self.n_frames, self.max_points, len(CHANNELS)
@@ -260,10 +261,23 @@ class RadarClipDataset(Dataset):
             times = [float(s) / 1e6 for s in chosen]
             times = [times[0]] * (F - len(times)) + times
 
+        # 자차 이력 궤적. 슬롯마다 "그 시각에서 뒤로 HIST_SECONDS" 를 담는다.
+        # 어느 슬롯이 질문 시각인지는 부르는 쪽이 알고 있으므로, 여기서는 전부
+        # 계산해 두고 고르게 한다 -- 슬롯당 17x3 이라 20 슬롯이어도 1,020 개다.
+        hist_xyz = np.zeros((F, HIST_POINTS, 3), dtype=np.float32)
+        ego_xyz = ego_raw[["x", "y", "z"]].to_numpy()
+        step_s = HIST_SECONDS / (HIST_POINTS - 1)
+
         for f in range(F):
             t_s = times[f]
             j = int(np.argmin(np.abs(ego_t - t_s)))
             ego_state[f] = (speed[j], accel[j], np.degrees(yaw_rate[j]))
+            # 질문 시각의 자차 좌표계로 옮긴다. 세계 좌표를 그대로 주면 토큰이
+            # 클립의 출발 위치를 말하게 되고, 그것은 답과 무관한 값이다.
+            grid = t_s - np.arange(HIST_POINTS - 1, -1, -1) * step_s
+            k = np.searchsorted(ego_t, grid).clip(0, len(ego_t) - 1)
+            rot = Rotation.from_quat(ego_q[j]).as_matrix()
+            hist_xyz[f] = (ego_xyz[k] - ego_xyz[j]) @ rot
             if len(scans) == 0:
                 continue
             pick = scans[int(np.argmin(np.abs(scans / 1e6 - t_s)))]
@@ -347,6 +361,7 @@ class RadarClipDataset(Dataset):
                 "box_class": torch.from_numpy(box_class),
                 "occupancy": torch.from_numpy(occupancy),
                 "ego_state": torch.from_numpy(ego_state),
+                "hist_xyz": torch.from_numpy(hist_xyz),
                 # Which sensor these points came from, for the routed experts.
                 # A clip whose radar could not be read is `none`, not `lrr1`.
                 "sensor": torch.tensor(
@@ -361,12 +376,13 @@ class RadarClipDataset(Dataset):
                 "box_class": torch.full((F, P), -1, dtype=torch.long),
                 "occupancy": torch.zeros(F, OCC_AZ_BINS * OCC_RANGE_BINS),
                 "ego_state": torch.zeros(F, 3),
+                "hist_xyz": torch.zeros(F, HIST_POINTS, 3),
                 "sensor": torch.tensor(SENSOR_IDS["none"])}
 
 
 def collate(batch):
     out = {"clip_id": [b["clip_id"] for b in batch]}
     for key in ("points", "mask", "is_moving", "box_class", "occupancy",
-                "ego_state", "sensor"):
+                "ego_state", "hist_xyz", "sensor"):
         out[key] = torch.stack([b[key] for b in batch])
     return out

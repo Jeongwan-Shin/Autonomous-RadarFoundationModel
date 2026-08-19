@@ -130,6 +130,10 @@ def load_model(args):
     # the same clips, that read as 7.59 m/s of error against a true 0.97.
     from training.number_tokens import add_number_tokens
     n_num = add_number_tokens(tokenizer, llm)
+    # 자차 이력 궤적 토큰. 숫자 토큰 뒤에 붙어야 한다 -- 순서가 바뀌면 id 가
+    # 밀려 예전 체크포인트가 조용히 다른 낱말을 가리킨다.
+    from training.traj_tokens import add_traj_tokens, init_embeddings
+    traj_pad_id, traj_first = add_traj_tokens(tokenizer, llm)
     if llm.get_input_embeddings().weight.shape[0] != len(tokenizer):
         raise SystemExit(
             f"어휘 불일치: 모델 {llm.get_input_embeddings().weight.shape[0]:,} "

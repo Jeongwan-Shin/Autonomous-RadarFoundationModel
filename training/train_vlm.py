@@ -278,8 +278,16 @@ def build(args, rank):
     # one wrong hundreds digit, the same as 200.
     from training.number_tokens import add_number_tokens
     n_num = add_number_tokens(tokenizer, llm)
+    # 자차 이력 궤적 토큰. 숫자 토큰 뒤에 붙어야 한다 -- 순서가 바뀌면 id 가
+    # 밀려 예전 체크포인트가 조용히 다른 낱말을 가리킨다.
+    from training.traj_tokens import add_traj_tokens, init_embeddings
+    traj_pad_id, traj_first = add_traj_tokens(tokenizer, llm)
+    # 이어받는 실행은 이미 학습된 임베딩을 갖고 있으므로 덮어쓰면 안 된다.
+    if not args.resume:
+        init_embeddings(tokenizer, llm)
     processor.tokenizer = tokenizer
     log(rank, f"radar pad token id {pad_id}, +{n_num:,} number tokens, "
+              f"traj pad {traj_pad_id} (+3,000 궤적 토큰, 첫 id {traj_first}), "
               f"vocab now {len(tokenizer)}")
 
     # The encoder's own recorded geometry wins over the flags: the number of

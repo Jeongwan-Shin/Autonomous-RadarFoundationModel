@@ -58,6 +58,11 @@ from transformers.video_utils import VideoMetadata
 from datatools import paths
 from datatools.frame_objects import COT_INSTRUCTION
 from training.connector import radar_prompt_block
+from training.traj_tokens import (AXES as TRAJ_AXES, HIST_HZ, HIST_SECONDS,
+                                  PAD_TOKEN as TRAJ_PAD,
+                                  encode as traj_encode,
+                                  traj_prompt_block)
+TRAJ_FIRST = f"<|traj_{TRAJ_AXES[0]}_0|>"
 from training.radar_encoder import SENSOR_IDS
 from training.radar_data import RadarClipDataset
 from training import frame_cache
@@ -849,6 +854,7 @@ class InstructDataset(Dataset):
                  processor=None, tokenizer=None, radar="lrr1",
                  n_frames=N_FRAMES, radar_tokens=RADAR_TOKENS,
                  radar_frames=RADAR_FRAMES, camera_dropout=0.0,
+                 traj_tokens=True,
                  verified_only=False, samples=0, mixture=None, seed=0,
                  max_text_tokens=512, nvidia_root=paths.NVIDIA_ROOT,
                  all_profiles=False, radar_dropout=0.0, forms=None):
@@ -873,6 +879,7 @@ class InstructDataset(Dataset):
         self.nvidia_root = nvidia_root
         self.radar_dropout = radar_dropout
         self.camera_dropout = camera_dropout
+        self.traj_tokens = traj_tokens
         self.radar_frames = radar_frames
         self.seed = seed
 
@@ -1084,12 +1091,30 @@ class InstructDataset(Dataset):
             ego_header = ("Ego motion (binned, 1 Hz, offsets in seconds from "
                           f"t={item['frame']}s)")
 
+        # 자차 이력은 문장이 아니라 어휘 안의 토큰으로 들어간다. 여기서는
+        # 자리표시자만 깔고, `build_collate` 가 그 자리의 id 를 궤적 토큰으로
+        # 바꾼다 -- Alpamayo 의 `fuse_traj_tokens` 와 같은 구조다.
+        #
+        # 구간 인덱스를 문장으로 쓰던 것(`-1s:s12a16y16`)을 대신한다. 그쪽은
+        # 속도/가속도/요레이트 세 스칼라였고 이쪽은 4초 궤적 전체다.
+        if self.traj_tokens:
+            slot = (len(radar["hist_xyz"]) - 1 if (instant or window)
+                    else min(int(item["frame"]), len(radar["hist_xyz"]) - 1))
+            traj_ids = traj_encode(radar["hist_xyz"][slot].numpy())
+            ego_block = (f"Ego history ({HIST_SECONDS:.1f}s at {HIST_HZ:.0f}Hz): "
+                         f"{traj_prompt_block()}")
+        else:
+            traj_ids = None
+            ego_block = f"{ego_header}: {ego}"
+
         user = (f"{radar_prompt_block(self.radar_tokens)}\n"
                 f"Sensors present: {sensors}.\n"
-                f"{ego_header}: {ego}\n"
+                f"{ego_block}\n"
                 f"{item['prompt']}")
         return {"clip_id": clip_id, "task": item["task"],
                 "frames": frames, "user": user, "target": target,
+                "traj_ids": (torch.from_numpy(traj_ids)
+                             if traj_ids is not None else None),
                 "points": points, "mask": mask,
                 # Routed experts key off this, so it has to follow the dropout:
                 # a blanked radar is `none`, not the sensor the rig carries.
@@ -1128,6 +1153,26 @@ def build_collate(processor, tokenizer, max_length=3584):
         encoded = processor(text=texts, videos=videos, video_metadata=metadata,
                            return_tensors="pt", padding=True, truncation=True,
                            max_length=max_length)
+
+        # 자리표시자 id 를 궤적 토큰 id 로 바꾼다. Alpamayo 의
+        # `replace_pad_token` 에 해당한다 -- 레이더는 임베딩을 후크로
+        # 덮어쓰지만 궤적은 id 자체가 바뀌므로, 여기서 끝난다.
+        #
+        # 잘림에 주의한다. `truncation=True` 가 자리표시자 일부를 잘라내면
+        # 남은 개수와 궤적 토큰 개수가 어긋나는데, 조용히 어긋나면 궤적이
+        # 한 칸씩 밀려 들어간다 -- 그 편이 아예 없는 것보다 나쁘다.
+        pad_id = tokenizer.convert_tokens_to_ids(TRAJ_PAD)
+        if pad_id is not None and batch[0].get("traj_ids") is not None:
+            first = tokenizer.convert_tokens_to_ids(TRAJ_FIRST)
+            ids = encoded["input_ids"]
+            for b, sample in enumerate(batch):
+                spots = (ids[b] == pad_id).nonzero(as_tuple=True)[0]
+                want = sample["traj_ids"]
+                if len(spots) != len(want):
+                    raise RuntimeError(
+                        f"궤적 자리 {len(spots)}개 대 토큰 {len(want)}개 -- "
+                        f"잘렸거나 프롬프트가 어긋났다 (task {sample['task']})")
+                ids[b, spots] = want.to(ids.dtype) + first
 
         # Supervise the assistant turn only. Everything before the final
         # generation header is context, and training on it would teach the model
