@@ -246,3 +246,20 @@ def render(text):
     if not w:
         return "(궤적 토큰 없음)"
     return "; ".join(f"+{h:.0f}s ({x:+.1f}m, {y:+.1f}m)" for h, (x, y) in w.items())
+
+
+def decode_answer(tokenizer, ids):
+    """답을 문자열로. 궤적 토큰은 살리고 채팅 제어 토큰만 지운다.
+
+    `skip_special_tokens=True` 를 쓰면 궤적 토큰이 통째로 사라진다 --
+    `additional_special_tokens` 로 등록했기 때문이다. 그러면 생성도 정답도 빈
+    문자열이 되고, 채점기는 "아무것도 못 냈다" 로 읽는다. v16 의 L2 가 계속
+    결측이었던 것이 이것이었고, 모델은 그동안 멀쩡히 내고 있었다.
+    """
+    text = tokenizer.decode(ids, skip_special_tokens=False)
+    for junk in ("<|im_end|>", "<|endoftext|>", "<|im_start|>"):
+        text = text.replace(junk, "")
+    pad = tokenizer.pad_token
+    if pad:
+        text = text.replace(pad, "")
+    return text.strip()

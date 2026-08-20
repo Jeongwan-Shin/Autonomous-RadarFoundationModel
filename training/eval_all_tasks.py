@@ -37,6 +37,7 @@ from torch.utils.data import DataLoader
 # 끄면 flash 나 mem-efficient 로 내려간다. 둘 다 같은 수를 내고, 이 모델
 # 크기에서 속도 차이는 측정되지 않았다.
 torch.backends.cuda.enable_cudnn_sdp(False)
+from training.traj_tokens import decode_answer
 from training.task_scorers import scorer_for, summarise
 
 _PLAIN = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
@@ -282,8 +283,7 @@ def run_task(task, args, loaded):
         prompt = {k: (v[:, :cut] if k in ("input_ids", "attention_mask",
                                           "mm_token_type_ids") else v)
                   for k, v in tensors.items()}
-        reference = tokenizer.decode(labels[0][labels[0] != -100],
-                                     skip_special_tokens=True)
+        reference = decode_answer(tokenizer, labels[0][labels[0] != -100])
         # radar_probe alternates between three questions whose answers differ in
         # magnitude by a factor of a hundred. Pooling them, the correlation just
         # detects which question was asked and reads 1.0 while the model tracks
@@ -317,7 +317,7 @@ def run_task(task, args, loaded):
                                    pad_token_id=tokenizer.pad_token_id
                                    or tokenizer.eos_token_id)
                 out = got.sequences
-                text = tokenizer.decode(out[0, cut:], skip_special_tokens=True)
+                text = decode_answer(tokenizer, out[0, cut:])
 
                 # 궤적은 하나만 내고 끝낼 것이 아니다. 미래는 여러 갈래이고
                 # 탐욕적 해독은 그중 가장 흔한 하나만 본다. Alpamayo 는 여섯 개를
@@ -339,8 +339,7 @@ def run_task(task, args, loaded):
                             num_return_sequences=args.plan_samples,
                             pad_token_id=tokenizer.pad_token_id
                             or tokenizer.eos_token_id)
-                    samples = [tokenizer.decode(many[i, cut:],
-                                                skip_special_tokens=True)
+                    samples = [decode_answer(tokenizer, many[i, cut:])
                                for i in range(many.shape[0])]
                 # Per-object confidence, from the model's own token
                 # probabilities. Without a score the detections cannot be

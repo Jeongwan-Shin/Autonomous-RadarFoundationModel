@@ -536,6 +536,12 @@ def main(argv=None):
     ap.add_argument("--radar-dropout", type=float, default=0.0,
                     help="blank the radar on this fraction of items and replace "
                          "radar-only targets with a refusal")
+    ap.add_argument("--eval-every", type=int, default=0,
+                    help="이 배수의 스텝마다 루프 안에서 평가한다. 0 이면 안 한다")
+    ap.add_argument("--eval-items", type=int, default=60,
+                    help="평가 태스크당 항목 수. 랭크들이 나눠 맡는다")
+    ap.add_argument("--eval-samples", type=int, default=6,
+                    help="계획에서 뽑을 갈래 수 (minADE_k). 1 이면 안 뽑는다")
     ap.add_argument("--save-every", type=int, default=0,
                     help="also write to <out>/latest every N optimiser steps")
     ap.add_argument("--seed", type=int, default=0,
@@ -702,6 +708,17 @@ def main(argv=None):
             json.dump(history, fh, indent=2)
         log(rank, f"saved to {target}")
 
+    evaluator = None
+    if args.eval_every:
+        from training.inloop_eval import InLoopEvaluator
+        evaluator = InLoopEvaluator(
+            every=args.eval_every, items=args.eval_items, out_dir=out_dir,
+            processor=processor, tokenizer=tokenizer, n_frames=args.frames,
+            radar_tokens=args.radar_tokens, radar_frames=args.radar_frames,
+            max_length=args.max_length, plan_samples=args.eval_samples,
+            split="test", rank=rank, world=world,
+            log=lambda m: log(rank, m))
+
     step, micro_step = 0, 0
     started = time.monotonic()
     history = []
@@ -798,6 +815,11 @@ def main(argv=None):
                 # crash at the end loses all of it.
                 if args.save_every and step % args.save_every == 0:
                     save("latest")
+                # 루프 안에서 잰다. 모델이 이미 올라가 있으므로 추가 메모리는
+                # KV 캐시뿐이고, 밖에서 재던 17.7 GB 짜리 두 번째 사본도
+                # 매번의 적재도 없다.
+                if evaluator is not None:
+                    evaluator.maybe_run(step, llm, encoder, connector, device)
                 if args.steps and step >= args.steps:
                     break
         if args.steps and step >= args.steps:
