@@ -513,8 +513,13 @@ def summarise(task, records, correlation=None, _fn=None):
                              if total.get("attr_n") else None),
                 "per_class": _per_class(total)}
     if fn is score_waypoints:
+        # 지평선이 하나도 안 읽혔으면 0 이 아니라 결측이다. 0 으로 나누기를
+        # 피하려고 max(...,1) 을 쓰면 "완벽" 과 "못 읽음" 이 같은 0.000 이 되고,
+        # 표에서는 최고 성적으로 보인다 -- 정답이 궤적 토큰이 된 뒤 첫 측정점이
+        # 정확히 그렇게 나왔다.
         return {"metric": "waypoints", "n": n,
-                "displacement_mae_m": total["err"] / max(total["horizons"], 1),
+                "displacement_mae_m": (total["err"] / total["horizons"]
+                                       if total["horizons"] else None),
                 "coverage": total["horizons"] / max(total["expected"], 1)}
     if fn is score_trajectory:
         # Each error is divided by the horizons that actually carried its form.

@@ -26,6 +26,17 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+# cuDNN 의 SDPA 백엔드를 끈다.
+#
+# v16 이 step 200 에서 죽었다 -- rank 2 의 그래디언트 체크포인팅 재계산 중
+# qwen3_vl 의 scaled_dot_product_attention 에서
+# "Expected mha_graph.execute(...).is_good() to be true, but got false".
+# 데이터가 아니라 백엔드 결함이고, 크기에 따라 터진다. 레이더 인코더에서
+# nn.MultiheadAttention 의 fastpath 를 껐던 것과 같은 계열이다.
+#
+# 끄면 flash 나 mem-efficient 로 내려간다. 둘 다 같은 수를 내고, 이 모델
+# 크기에서 속도 차이는 측정되지 않았다.
+torch.backends.cuda.enable_cudnn_sdp(False)
 from training.task_scorers import scorer_for, summarise
 
 _PLAIN = ("det_objects_azdeg", "det_objects_3dbbox", "track_step_azdeg",
