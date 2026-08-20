@@ -58,7 +58,9 @@ from transformers.video_utils import VideoMetadata
 from datatools import paths
 from datatools.frame_objects import COT_INSTRUCTION
 from training.connector import radar_prompt_block
-from training.traj_tokens import (AXES as TRAJ_AXES, HIST_HZ, HIST_SECONDS,
+from training.traj_tokens import (AXES as TRAJ_AXES, FUT_POINTS,
+                                  HIST_HZ, HIST_SECONDS,
+                                  token_string as traj_token_string,
                                   PAD_TOKEN as TRAJ_PAD,
                                   encode as traj_encode,
                                   traj_prompt_block)
@@ -1059,6 +1061,28 @@ class InstructDataset(Dataset):
         target = item["target"]
         if present is None and item["task"] in RADAR_ONLY_TASKS:
             target = NO_RADAR_ANSWER
+        # 자차 계획의 정답을 궤적 토큰으로. 입력에만 두면 3,000 개 임베딩이
+        # 프롬프트 쪽 기울기로만 배우고, 그 기울기는 "무시해도 손실이 비슷하다"
+        # 는 상태에서 거의 0 이다. 출력에도 두면 매 스텝 90 개에 직접
+        # 교차엔트로피가 걸리고, 같은 코드북이라 거기서 배운 의미가 입력 해석에
+        # 그대로 쓰인다 -- Alpamayo 가 6.4초 64 지점을 이렇게 낸다.
+        #
+        # `plan_ego_control`(속도·요레이트 형식)은 텍스트로 남긴다. 지시문이
+        # 출력 형식을 고른다는 주장이 그 대비에 기대고 있다.
+        if self.traj_tokens and item["task"].startswith("plan_ego_xy"):
+            slot = (len(radar["fut_xyz"]) - 1 if (instant or window)
+                    else min(int(item["frame"]), len(radar["fut_xyz"]) - 1))
+            fut = traj_token_string(traj_encode(radar["fut_xyz"][slot].numpy(),
+                                                expect=FUT_POINTS))
+            if item["task"].endswith("_cot"):
+                try:
+                    doc = json.loads(target)
+                    doc["answer"] = fut
+                    target = json.dumps(doc)
+                except (ValueError, TypeError):
+                    target = fut
+            else:
+                target = fut
 
         if instant:
             # One sample, at the instant asked about. The windowed ego state is

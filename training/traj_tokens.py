@@ -22,6 +22,7 @@ Alpamayo (NVlabs, arXiv 2511.00088) 의 `DeltaTrajectoryTokenizer` 를 따른다
 """
 
 import argparse
+import re
 
 import numpy as np
 import torch
@@ -65,16 +66,31 @@ def traj_tokens():
     return [f"<|traj_{a}_{i}|>" for a in AXES for i in range(BINS)]
 
 
-def encode(history_xyz):
-    """(HIST_POINTS, 3) 자차 좌표계 이력 -> (TOKENS_PER_HISTORY,) 구간 인덱스.
+# 미래 궤적도 같은 코드북으로 낸다. 3초를 10 Hz 로 31점 -> 델타 30 x 3축 = 90.
+#
+# 입력에만 두면 3,000 개 임베딩이 프롬프트 쪽 기울기로만 배우는데, 그 기울기는
+# "궤적 토큰을 무시하고 카메라로 답해도 손실이 비슷하다" 는 상태에서 거의 0 이다
+# -- 레이더가 안 읽히던 것과 같은 구조다. 출력에도 두면 매 스텝 90 개 토큰에
+# 직접 교차엔트로피가 걸리고, 같은 코드북이므로 거기서 배운 의미가 입력 해석에
+# 그대로 쓰인다. Alpamayo 는 6.4초 64 지점을 이렇게 낸다.
+FUT_SECONDS = 3.0
+FUT_POINTS = 31
+TOKENS_PER_FUTURE = (FUT_POINTS - 1) * N_AXES        # 90
 
-    반환값은 축별 코드북 안의 위치다. 어휘 id 로 바꾸는 것은 부르는 쪽의 몫이고,
-    그래야 이 함수가 토크나이저를 몰라도 된다.
+
+def encode(xyz_points, expect=None):
+    """(N, 3) 자차 좌표계 궤적 -> ((N-1)*3,) 구간 인덱스.
+
+    이력이든 미래든 같은 함수다 -- Alpamayo 도 이력을 `fut_xyz` 자리에 넘겨
+    같은 인코딩을 태운다. 반환값은 축별 코드북 안의 위치이고, 어휘 id 로 바꾸는
+    것은 부르는 쪽의 몫이다. 그래야 이 함수가 토크나이저를 몰라도 된다.
     """
-    xyz = np.asarray(history_xyz, dtype=np.float64)
-    if xyz.shape != (HIST_POINTS, N_AXES):
-        raise ValueError(f"이력은 ({HIST_POINTS}, {N_AXES}) 여야 한다: {xyz.shape}")
-    delta = np.diff(xyz, axis=0)                     # (16, 3)
+    xyz = np.asarray(xyz_points, dtype=np.float64)
+    if xyz.ndim != 2 or xyz.shape[1] != N_AXES:
+        raise ValueError(f"(N, {N_AXES}) 여야 한다: {xyz.shape}")
+    if expect is not None and xyz.shape[0] != expect:
+        raise ValueError(f"{expect} 점이어야 한다: {xyz.shape[0]}")
+    delta = np.diff(xyz, axis=0)
     out = np.zeros(delta.shape, dtype=np.int64)
     for k, axis in enumerate(AXES):
         lo, hi = AXIS_RANGE[axis]
@@ -86,8 +102,8 @@ def encode(history_xyz):
 
 
 def decode(indices):
-    """구간 인덱스 -> 자차 좌표계 이력. 되돌려 보고 확인하는 용도."""
-    idx = np.asarray(indices, dtype=np.int64).reshape(HIST_POINTS - 1, N_AXES)
+    """구간 인덱스 -> 자차 좌표계 궤적. 길이는 준 것에서 정한다."""
+    idx = np.asarray(indices, dtype=np.int64).reshape(-1, N_AXES)
     delta = np.zeros(idx.shape, dtype=np.float64)
     for k, axis in enumerate(AXES):
         lo, hi = AXIS_RANGE[axis]
@@ -174,3 +190,59 @@ def init_embeddings(tokenizer, model):
 def traj_prompt_block():
     """프롬프트에 깔 자리표시자 문자열."""
     return PAD_TOKEN * TOKENS_PER_HISTORY
+
+
+def token_string(indices):
+    """구간 인덱스 -> 어휘 토큰 문자열. 정답에 그대로 쓴다."""
+    idx = np.asarray(indices, dtype=np.int64).reshape(-1, N_AXES)
+    out = []
+    for row in idx:
+        for k, axis in enumerate(AXES):
+            out.append(f"<|traj_{axis}_{int(row[k]) - k * BINS}|>")
+    return "".join(out)
+
+
+TOKEN_RE = re.compile(r"<\|traj_([xyz])_(\d+)\|>")
+
+
+def parse_tokens(text):
+    """생성된 문자열에서 구간 인덱스를 뽑는다. 축이 어긋난 것은 버린다.
+
+    모델은 초반에 아무 토큰이나 낸다. 축 순서(x, y, z)가 맞는 삼중항만 취해서,
+    한 축이 빠졌을 때 뒤가 통째로 밀리는 일을 막는다.
+    """
+    got = TOKEN_RE.findall(text or "")
+    idx, buf = [], []
+    for axis, num in got:
+        want = AXES[len(buf)]
+        if axis != want:
+            buf = []
+            if axis != AXES[0]:
+                continue
+        buf.append(AXES.index(axis) * BINS + int(num))
+        if len(buf) == N_AXES:
+            idx.append(buf); buf = []
+    return np.array(idx, dtype=np.int64).reshape(-1) if idx else np.zeros(0, np.int64)
+
+
+def to_waypoints(text, horizons=(1.0, 2.0, 3.0)):
+    """생성 문자열 -> {지평선: (x, y)}. 채점기가 쓰는 형태."""
+    idx = parse_tokens(text)
+    if len(idx) < N_AXES:
+        return {}
+    path = decode(idx)
+    step = FUT_SECONDS / (FUT_POINTS - 1)
+    out = {}
+    for h in horizons:
+        j = int(round(h / step))
+        if j < len(path):
+            out[h] = (float(path[j, 0]), float(path[j, 1]))
+    return out
+
+
+def render(text):
+    """사람이 읽을 수 있게. 생성물 파일에 이 형태로도 남긴다."""
+    w = to_waypoints(text)
+    if not w:
+        return "(궤적 토큰 없음)"
+    return "; ".join(f"+{h:.0f}s ({x:+.1f}m, {y:+.1f}m)" for h, (x, y) in w.items())

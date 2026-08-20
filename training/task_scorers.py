@@ -284,10 +284,24 @@ def score_objects(generated, reference):
     return out
 
 
+def waypoints_of(text):
+    """텍스트든 궤적 토큰이든 {지평선: (x, y)} 로.
+
+    `plan_ego_xy` 의 정답이 궤적 토큰이 된 뒤에도 지표는 같은 L2 여야 한다 --
+    표현이 바뀌었다고 숫자의 뜻이 바뀌면 이전 실행과 비교할 수 없다. 그래서
+    채점 직전에 되돌려 미터로 만든다.
+    """
+    got = {int(h): (float(x), float(y)) for h, x, y in WAYPOINT.findall(text or "")}
+    if got:
+        return got
+    from training.traj_tokens import to_waypoints
+    return {int(h): xy for h, xy in to_waypoints(text).items()}
+
+
 def score_waypoints(generated, reference):
     """Mean displacement error in metres, over the horizons both mention."""
-    got = {int(h): (float(x), float(y)) for h, x, y in WAYPOINT.findall(generated or "")}
-    want = {int(h): (float(x), float(y)) for h, x, y in WAYPOINT.findall(reference or "")}
+    got = waypoints_of(generated)
+    want = waypoints_of(reference)
     shared = sorted(set(got) & set(want))
     out = {"n": 1, "horizons": len(shared), "expected": len(want), "err": 0.0}
     for h in shared:

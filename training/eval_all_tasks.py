@@ -51,7 +51,8 @@ MAX_NEW = {"det_objects_azdeg": 200, "det_objects_3dbbox": 240,
            "motion_seg_azdeg": 280, "motion_seg_bbox": 320,
            "agent_traj_azdeg": 100, "agent_traj_bbox": 120,
            "agent_traj_xy": 90,
-           "plan_ego_xy": 80, "plan_ego_control": 110,
+           # 궤적 토큰 90 개 + 여유. 텍스트일 때의 80 으로는 답이 잘린다.
+    "plan_ego_xy": 110, "plan_ego_control": 110,
            "desc_radar": 120, "desc_complementarity": 120, "desc_objects": 120,
            "desc_ego_maneuver": 80, "desc_clip_summary": 160, "retrieval": 60,
            # One number each. Listed rather than left to the default so the
@@ -314,8 +315,17 @@ def run_task(task, args, loaded):
                 spans = object_confidences(tokenizer, out[0, cut:], got.scores)
                 result = scorer(text, reference)
                 records[mode].append(result)
+                # 궤적 토큰은 사람이 못 읽는다. 눈으로 검사하던 방식이 막히지
+                # 않도록 되돌린 형태를 같이 남긴다 -- 채점이 이미 네 번
+                # 틀렸고, 그때마다 텍스트가 판정 근거였다.
+                readable = None
+                if "<|traj_" in text or "<|traj_" in reference:
+                    from training.traj_tokens import render
+                    readable = {"generated": render(text),
+                                "reference": render(reference)}
                 generations.append({
                     "task": task, "mode": mode, "form": form,
+                    "readable": readable,
                     "clip_id": clip_id, "prompt": asked[-220:],
                     "generated": text.strip(), "reference": reference.strip(),
                     "confidence": spans,
