@@ -318,6 +318,30 @@ def run_task(task, args, loaded):
                                    or tokenizer.eos_token_id)
                 out = got.sequences
                 text = tokenizer.decode(out[0, cut:], skip_special_tokens=True)
+
+                # 궤적은 하나만 내고 끝낼 것이 아니다. 미래는 여러 갈래이고
+                # 탐욕적 해독은 그중 가장 흔한 하나만 본다. Alpamayo 는 여섯 개를
+                # 뽑아 정답에 가장 가까운 것으로 잰다(minADE_k) -- 표준 궤적
+                # 예측 지표이고 "옳은 미래를 후보에 담고 있는가" 를 묻는다.
+                # 탐욕 L2 는 그대로 두고 열을 하나 더한다. 지표의 뜻이 바뀌면
+                # v12/v14 와 비교할 수 없다.
+                samples = []
+                if (getattr(args, "plan_samples", 1) > 1 and mode == "full"
+                        and task.startswith("plan_ego_xy")):
+                    with torch.no_grad():
+                        many = llm.generate(
+                            **prompt,
+                            max_new_tokens=max(MAX_NEW.get(task, 48),
+                                               args.max_new_floor),
+                            do_sample=True,
+                            temperature=getattr(args, "plan_temperature", 1.0),
+                            top_p=0.95,
+                            num_return_sequences=args.plan_samples,
+                            pad_token_id=tokenizer.pad_token_id
+                            or tokenizer.eos_token_id)
+                    samples = [tokenizer.decode(many[i, cut:],
+                                                skip_special_tokens=True)
+                               for i in range(many.shape[0])]
                 # Per-object confidence, from the model's own token
                 # probabilities. Without a score the detections cannot be
                 # ranked, and without a ranking there is no precision-recall
@@ -337,6 +361,7 @@ def run_task(task, args, loaded):
                 generations.append({
                     "task": task, "mode": mode, "form": form,
                     "readable": readable,
+                    "samples": samples or None,
                     "clip_id": clip_id, "prompt": asked[-220:],
                     "generated": text.strip(), "reference": reference.strip(),
                     "confidence": spans,
@@ -435,6 +460,10 @@ def main(argv=None):
     ap.add_argument("--items", type=int, default=200)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--show", type=int, default=2)
+    ap.add_argument("--plan-samples", type=int, default=6,
+                    help="계획 태스크에서 몇 갈래를 뽑을지. Alpamayo 와 같은 6. "
+                         "1 이면 표본을 뽑지 않는다")
+    ap.add_argument("--plan-temperature", type=float, default=1.0)
     ap.add_argument("--max-new-floor", type=int, default=0,
                     help="raise every task's generation budget to at least "
                          "this. The per-task budgets are sized for the answer "

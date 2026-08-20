@@ -64,6 +64,14 @@ def mean_abs_azimuth(text):
     return float(np.mean(v)) if v else None
 
 
+def _traj_wp(text):
+    """궤적 토큰이면 되돌려 지점으로. 텍스트면 빈 값."""
+    if "<|traj_" not in (text or ""):
+        return {}
+    from training.traj_tokens import to_waypoints
+    return {int(h): xy for h, xy in to_waypoints(text).items()}
+
+
 def waypoints(text):
     return {int(h): (float(x), float(y)) for h, x, y in XY.findall(text or "")}
 
@@ -281,6 +289,7 @@ def worker_main(argv):
     ap.add_argument("--nuscenes", default=None)
     ap.add_argument("--model", default="8B")
     ap.add_argument("--split", default="test")
+    ap.add_argument("--plan-samples", type=int, default=6)
     a = ap.parse_args(argv)
     from training.eval_all_tasks import MAX_NEW, load_model, run_task
 
@@ -292,6 +301,7 @@ def worker_main(argv):
     cfg.max_new_floor, cfg.all_profiles, cfg.seed = 0, True, 0
     cfg.radar_dropout, cfg.out = 0.0, None
     cfg.shard, cfg.shards = a.shard, a.shards
+    cfg.plan_samples, cfg.plan_temperature = a.plan_samples, 1.0
     loaded = load_model(cfg)
 
     # 단계가 끝날 때마다 바로 쓴다. 처음에는 끝에서 한 번에 썼는데, nuScenes
@@ -406,7 +416,8 @@ def evaluate_sharded(snapshot, args):
                "--snapshot", snapshot, "--out", out,
                "--shard", str(i), "--shards", str(len(devices)),
                "--items", str(args.items), "--nus-items", str(args.nus_items),
-               "--model", args.model, "--split", args.split]
+               "--model", args.model, "--split", args.split,
+               "--plan-samples", str(args.plan_samples)]
         if args.nuscenes:
             cmd += ["--nuscenes", args.nuscenes]
         procs.append((subprocess.Popen(cmd, env=env,
@@ -438,7 +449,8 @@ def evaluate_sharded(snapshot, args):
                "--snapshot", snapshot, "--out", out,
                "--shard", str(i), "--shards", str(len(devices)),
                "--items", str(args.items), "--nus-items", str(args.nus_items),
-               "--model", args.model, "--split", args.split]
+               "--model", args.model, "--split", args.split,
+               "--plan-samples", str(args.plan_samples)]
         if args.nuscenes:
             cmd += ["--nuscenes", args.nuscenes]
         r = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL,
@@ -524,6 +536,29 @@ def score_generations(gens, focal_px=None):
                             detection_scores(got, "box").items()})
             elif task == "plan_ego_xy":
                 row[f"{pre}l2"] = s.get("displacement_mae_m")
+                # minADE_k -- 여섯 갈래 중 정답에 가장 가까운 것. 탐욕 L2 와
+                # 나란히 둔다. 둘의 간격이 "옳은 미래를 후보에는 담고 있으나
+                # 첫 번째로 고르지 못한다" 는 상태를 드러낸다.
+                best, cover = [], 0
+                for g in got:
+                    cand = g.get("samples") or []
+                    truth = waypoints(g["reference"]) or _traj_wp(g["reference"])
+                    if not cand or not truth:
+                        continue
+                    errs = []
+                    for c in cand:
+                        p_ = waypoints(c) or _traj_wp(c)
+                        shared = set(p_) & set(truth)
+                        if shared:
+                            errs.append(float(np.mean([
+                                np.hypot(p_[h][0] - truth[h][0],
+                                         p_[h][1] - truth[h][1])
+                                for h in shared])))
+                    if errs:
+                        best.append(min(errs)); cover += 1
+                if best:
+                    row[f"{pre}l2_min6"] = float(np.mean(best))
+                    row[f"{pre}l2_min_cover"] = cover / len(got)
                 per = {1: [], 2: [], 3: []}
                 for g in got:
                     p, q = waypoints(g["generated"]), waypoints(g["reference"])
@@ -640,6 +675,8 @@ def main(argv=None):
                     help="nuScenes 번들 폴더. 주면 같은 체크포인트를 두 rig 에서 "
                          "잰다 -- 재학습 없는 전이 시험")
     ap.add_argument("--nus-items", type=int, default=40)
+    ap.add_argument("--plan-samples", type=int, default=6,
+                    help="계획에서 뽑을 갈래 수. Alpamayo 와 같은 6")
     ap.add_argument("--offset", type=int, default=0,
                     help="재개한 실행은 스텝을 0 부터 다시 센다. 재개 지점을 "
                          "여기 주면 추세가 한 축 위에 놓이고, 이미 잰 스텝과 "
